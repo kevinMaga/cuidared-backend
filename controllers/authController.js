@@ -147,4 +147,60 @@ const completarPerfilCuidadora = async (req, res) => {
   }
 };
 
-module.exports = { registro, login, logout, completarPerfilCuidadora };
+// CREAR ADMINISTRADOR (uso interno, protegido por clave secreta)
+const crearAdmin = async (req, res) => {
+  const { correo, password, nombre, telefono, claveSecreta } = req.body;
+
+  // Protección: solo se puede crear admin con la clave correcta
+  if (claveSecreta !== process.env.ADMIN_SECRET_KEY) {
+    return res.status(403).json({ error: 'No autorizado para crear administradores' });
+  }
+
+  try {
+    // 1. Crear usuario en Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: correo,
+      password: password,
+    });
+
+    if (authError) return res.status(400).json({ error: authError.message });
+
+    const userId = authData.user.id;
+
+    // 2. Crear perfil con rol admin
+    const { error: perfilError } = await supabase
+      .from('perfiles')
+      .insert({
+        id: userId,
+        rol: 'admin',
+        nombre: nombre,
+        telefono: telefono,
+        correo: correo,
+        verificado: true,
+      });
+
+    if (perfilError) return res.status(400).json({ error: perfilError.message });
+
+    // 3. Crear registro en tabla admins
+    const { error: adminError } = await supabase
+      .from('admins')
+      .insert({
+        id: userId,
+        nombre_organizacion: 'CUIDA RED',
+        puede_verificar: true,
+        puede_moderar_chat: true,
+      });
+
+    if (adminError) return res.status(400).json({ error: adminError.message });
+
+    res.status(201).json({
+      mensaje: 'Administrador creado correctamente',
+      usuario: { id: userId, correo, nombre, rol: 'admin' }
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin };
