@@ -96,4 +96,55 @@ const logout = async (req, res) => {
   }
 };
 
-module.exports = { registro, login, logout };
+// COMPLETAR PERFIL DE CUIDADORA
+const completarPerfilCuidadora = async (req, res) => {
+  const { userId, datos } = req.body;
+
+  try {
+    const { error } = await supabase
+      .from('cuidadoras')
+      .update({
+        nivel_formacion: datos.nivel_formacion,
+        titulo_academico: datos.titulo_academico,
+        certificaciones_adicionales: datos.certificaciones_adicionales,
+        años_experiencia: datos.años_experiencia,
+
+        referencia_1_nombre: datos.referencia_1_nombre,
+        referencia_1_telefono: datos.referencia_1_telefono,
+        referencia_2_nombre: datos.referencia_2_nombre,
+        referencia_2_telefono: datos.referencia_2_telefono,
+        referencia_3_nombre: datos.referencia_3_nombre,
+        referencia_3_telefono: datos.referencia_3_telefono,
+
+        especialidades: datos.especialidades,
+        provincia: datos.coverageProvince,
+        zonas_cobertura: datos.zonas_cobertura,
+        modalidad: datos.modalidad,
+        dias_disponibles: datos.dias_disponibles,
+        idiomas: datos.idiomas,
+        tiene_licencia: datos.tiene_licencia,
+
+        acepto_compromiso_etico: datos.acepto_compromiso_etico,
+        acepto_terminos: datos.acepto_terminos,
+      })
+      .eq('id', userId);
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    // Actualizar provincia y ciudad en perfiles
+    await supabase
+      .from('perfiles')
+      .update({
+        provincia: datos.coverageProvince,
+        ciudad: datos.coverageCity,
+      })
+      .eq('id', userId);
+
+    res.json({ mensaje: 'Perfil de cuidadora completado correctamente' });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+module.exports = { registro, login, logout, completarPerfilCuidadora };
