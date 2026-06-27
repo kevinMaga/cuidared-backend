@@ -1,0 +1,225 @@
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+// MÉTRICAS DEL DASHBOARD
+const getDashboardMetrics = async (req, res) => {
+  try {
+    const { count: cuidadorasCount } = await supabase
+      .from('cuidadoras')
+      .select('*', { count: 'exact', head: true });
+
+    const { count: empleadorasCount } = await supabase
+      .from('empleadoras')
+      .select('*', { count: 'exact', head: true });
+
+    const { count: solicitudesCount } = await supabase
+      .from('solicitudes_conexion')
+      .select('*', { count: 'exact', head: true });
+
+    const { count: serviciosCount } = await supabase
+      .from('servicios')
+      .select('*', { count: 'exact', head: true })
+      .neq('estado', 'cancelado');
+
+    res.json({
+      cuidadoras: cuidadorasCount || 0,
+      familias: empleadorasCount || 0,
+      solicitudes: solicitudesCount || 0,
+      servicios: serviciosCount || 0,
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener métricas del dashboard' });
+  }
+};
+
+// ---------- CURSOS ----------
+
+// GET /api/admin/cursos  -> catálogo con conteo de módulos
+exports.listarCursos = async (req, res) => {
+  try {
+    const incluirArchivados = req.query.archivados === 'true';
+    let query = supabase
+      .from('cursos')
+      .select('*, modulos(count)')
+      .order('created_at', { ascending: true });
+    if (!incluirArchivados) query = query.eq('archivado', false);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const cursos = data.map((c) => ({ ...c, total_modulos: c.modulos?.[0]?.count ?? 0 }));
+    res.json(cursos);
+  } catch (err) {
+    console.error('listarCursos:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los cursos' });
+  }
+};
+
+// GET /api/admin/cursos/:id  -> curso + módulos (vista previa / pantalla módulos)
+exports.obtenerCurso = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: curso, error: e1 } = await supabase
+      .from('cursos').select('*').eq('id', id).single();
+    if (e1) throw e1;
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+
+    const { data: modulos, error: e2 } = await supabase
+      .from('modulos').select('*')
+      .eq('curso_id', id).eq('archivado', false)
+      .order('orden', { ascending: true });
+    if (e2) throw e2;
+
+    res.json({ ...curso, modulos: modulos ?? [], total_modulos: modulos?.length ?? 0 });
+  } catch (err) {
+    console.error('obtenerCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo obtener el curso' });
+  }
+};
+
+// POST /api/admin/cursos
+exports.crearCurso = async (req, res) => {
+  try {
+    const { titulo, descripcion, duracion, categoria } = req.body;
+    if (!titulo) return res.status(400).json({ error: 'El título es obligatorio' });
+
+    const { data, error } = await supabase
+      .from('cursos')
+      .insert({
+        titulo,
+        descripcion: descripcion ?? null,
+        duracion: duracion ?? null,
+        categoria: categoria === 'obligatorio' ? 'obligatorio' : 'opcional',
+      })
+      .select().single();
+    if (error) throw error;
+
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('crearCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo crear el curso' });
+  }
+};
+
+// PUT /api/admin/cursos/:id
+exports.editarCurso = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { titulo, descripcion, duracion, categoria } = req.body;
+
+    const cambios = {};
+    if (titulo !== undefined) cambios.titulo = titulo;
+    if (descripcion !== undefined) cambios.descripcion = descripcion;
+    if (duracion !== undefined) cambios.duracion = duracion;
+    if (categoria !== undefined)
+      cambios.categoria = categoria === 'obligatorio' ? 'obligatorio' : 'opcional';
+
+    const { data, error } = await supabase
+      .from('cursos').update(cambios).eq('id', id).select().single();
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error('editarCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo actualizar el curso' });
+  }
+};
+
+// PATCH /api/admin/cursos/:id/archivar   body: { archivado: true|false }
+exports.archivarCurso = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const archivado = req.body.archivado !== false; // por defecto archiva
+    const { data, error } = await supabase
+      .from('cursos').update({ archivado }).eq('id', id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('archivarCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo archivar el curso' });
+  }
+};
+
+// ---------- MÓDULOS ----------
+
+// POST /api/admin/cursos/:cursoId/modulos
+exports.crearModulo = async (req, res) => {
+  try {
+    const { cursoId } = req.params;
+    const { titulo, descripcion, duracion, video_url } = req.body;
+    if (!titulo) return res.status(400).json({ error: 'El título es obligatorio' });
+
+    // orden = (máximo actual) + 1
+    const { data: ultimo } = await supabase
+      .from('modulos').select('orden')
+      .eq('curso_id', cursoId)
+      .order('orden', { ascending: false }).limit(1).maybeSingle();
+    const orden = (ultimo?.orden ?? 0) + 1;
+
+    const { data, error } = await supabase
+      .from('modulos')
+      .insert({
+        curso_id: cursoId,
+        titulo,
+        descripcion: descripcion ?? null,
+        duracion: duracion ?? null,
+        video_url: video_url ?? null,
+        orden,
+      })
+      .select().single();
+    if (error) throw error;
+
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('crearModulo:', err.message);
+    res.status(500).json({ error: 'No se pudo crear el módulo' });
+  }
+};
+
+// PUT /api/admin/modulos/:id
+exports.editarModulo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { titulo, descripcion, duracion, video_url, orden } = req.body;
+
+    const cambios = {};
+    if (titulo !== undefined) cambios.titulo = titulo;
+    if (descripcion !== undefined) cambios.descripcion = descripcion;
+    if (duracion !== undefined) cambios.duracion = duracion;
+    if (video_url !== undefined) cambios.video_url = video_url;
+    if (orden !== undefined) cambios.orden = orden;
+
+    const { data, error } = await supabase
+      .from('modulos').update(cambios).eq('id', id).select().single();
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error('editarModulo:', err.message);
+    res.status(500).json({ error: 'No se pudo actualizar el módulo' });
+  }
+};
+
+// PATCH /api/admin/modulos/:id/archivar
+exports.archivarModulo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const archivado = req.body.archivado !== false;
+    const { data, error } = await supabase
+      .from('modulos').update({ archivado }).eq('id', id).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('archivarModulo:', err.message);
+    res.status(500).json({ error: 'No se pudo archivar el módulo' });
+  }
+};
+
+exports.getDashboardMetrics = getDashboardMetrics;
