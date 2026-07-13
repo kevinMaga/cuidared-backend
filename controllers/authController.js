@@ -147,6 +147,66 @@ const completarPerfilCuidadora = async (req, res) => {
   }
 };
 
+// Mapea el tipo de documento a su columna en la tabla cuidadoras
+const COLUMNAS_DOC = {
+  cedula: 'url_cedula',
+  migratorio: 'url_certificado_migratorio',
+  record_policial: 'url_record_policial',
+  titulo: 'url_copia_titulo',
+  certificaciones: 'url_certificados',
+  cv: 'url_cv',
+};
+
+// POST /api/auth/subir-documento  (multipart: campo "documento")
+// body: cuidadoraId, tipo
+const subirDocumento = async (req, res) => {
+  try {
+    const { cuidadoraId, tipo } = req.body;
+    if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
+    if (!cuidadoraId) return res.status(400).json({ error: 'Falta cuidadoraId' });
+
+    const columna = COLUMNAS_DOC[tipo];
+    if (!columna) return res.status(400).json({ error: 'Tipo de documento no válido' });
+
+    // Nombre único: cada tipo sobrescribe al anterior de esa cuidadora
+    const ext = req.file.originalname.split('.').pop();
+    const nombreArchivo = `${cuidadoraId}/${tipo}-${Date.now()}.${ext}`;
+
+    const { error: upErr } = await supabase.storage
+      .from('documentos-cuidadoras')
+      .upload(nombreArchivo, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true,
+      });
+    if (upErr) throw upErr;
+
+    const { data: pub } = supabase.storage
+      .from('documentos-cuidadoras')
+      .getPublicUrl(nombreArchivo);
+
+    // Guarda la URL en la columna que toca
+    const { error: updErr } = await supabase
+      .from('cuidadoras')
+      .update({ [columna]: pub.publicUrl })
+      .eq('id', cuidadoraId);
+    if (updErr) throw updErr;
+
+    // Al (re)subir un documento, su revisión vuelve a "pendiente"
+    // para que el admin lo revise de nuevo.
+    await supabase
+      .from('revisiones_documentos')
+      .upsert(
+        { cuidadora_id: cuidadoraId, tipo, estado: 'pendiente', nota: null },
+        { onConflict: 'cuidadora_id,tipo' }
+      );
+
+    res.status(201).json({ url: pub.publicUrl, nombre: req.file.originalname });
+  } catch (err) {
+    console.error('subirDocumento:', err.message);
+    res.status(500).json({ error: 'No se pudo subir el documento' });
+  }
+};
+
 // CREAR ADMINISTRADOR (uso interno, protegido por clave secreta)
 const crearAdmin = async (req, res) => {
   const { correo, password, nombre, telefono, claveSecreta } = req.body;
@@ -203,4 +263,4 @@ const crearAdmin = async (req, res) => {
   }
 };
 
-module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin };
+module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin, subirDocumento };

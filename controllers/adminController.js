@@ -6,6 +6,17 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+const TIPOS_DOC = ['cedula', 'migratorio', 'record_policial', 'titulo', 'certificaciones', 'cv'];
+const COL_DOC = {
+  cedula: 'url_cedula',
+  migratorio: 'url_certificado_migratorio',
+  record_policial: 'url_record_policial',
+  titulo: 'url_copia_titulo',
+  certificaciones: 'url_certificados',
+  cv: 'url_cv',
+};
+
+
 // MÉTRICAS DEL DASHBOARD
 const getDashboardMetrics = async (req, res) => {
   try {
@@ -219,6 +230,131 @@ exports.archivarModulo = async (req, res) => {
   } catch (err) {
     console.error('archivarModulo:', err.message);
     res.status(500).json({ error: 'No se pudo archivar el módulo' });
+  }
+};
+
+// ---------- SUBIDA DE VIDEO ----------
+// POST /api/admin/upload-video  (multipart/form-data, campo "video")
+exports.subirVideo = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo' });
+
+    // Nombre único para evitar colisiones
+    const ext = req.file.originalname.split('.').pop();
+    const nombreArchivo = `modulo-${Date.now()}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from('videos-modulos')
+      .upload(nombreArchivo, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false,
+      });
+    if (error) throw error;
+
+    // URL pública del archivo subido
+    const { data } = supabase.storage
+      .from('videos-modulos')
+      .getPublicUrl(nombreArchivo);
+
+    res.status(201).json({ url: data.publicUrl });
+  } catch (err) {
+    console.error('subirVideo:', err.message);
+    res.status(500).json({ error: 'No se pudo subir el video' });
+  }
+};
+
+// Calcula el estado general a partir de los 6 documentos
+function estadoGeneral(docs) {
+  const subidos = docs.filter((d) => d.url);
+  if (subidos.some((d) => d.estado === 'cambios_solicitados')) return 'changes_requested';
+  if (subidos.length === TIPOS_DOC.length && subidos.every((d) => d.estado === 'aprobado')) {
+    return 'approved';
+  }
+  return 'pending';
+}
+
+// GET /api/admin/validaciones  -> lista para la pantalla de Validaciones
+exports.listarValidaciones = async (req, res) => {
+  try {
+    // Cuidadoras con su perfil (nombre) y sus urls de documentos
+    const { data: cuidadoras, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select(`
+        id, url_cedula, url_certificado_migratorio, url_record_policial,
+        url_copia_titulo, url_certificados, url_cv,
+        perfiles!inner ( nombre, avatar_url )
+      `);
+    if (e1) throw e1;
+
+    const { data: revisiones, error: e2 } = await supabase
+      .from('revisiones_documentos')
+      .select('*');
+    if (e2) throw e2;
+
+    const resultado = cuidadoras.map((c) => {
+      const docs = TIPOS_DOC.map((tipo) => {
+        const rev = revisiones.find((r) => r.cuidadora_id === c.id && r.tipo === tipo);
+        return {
+          tipo,
+          url: c[COL_DOC[tipo]] || null,
+          estado: rev?.estado || 'pendiente',
+          nota: rev?.nota || null,
+        };
+      });
+      const subidos = docs.filter((d) => d.url).length;
+
+      return {
+        id: c.id,
+        caregiverId: c.id,
+        caregiverName: c.perfiles?.nombre || 'Sin nombre',
+        status: estadoGeneral(docs),
+        uploadedDocs: subidos,
+        totalDocs: TIPOS_DOC.length,
+        docs,
+      };
+    });
+
+    res.json(resultado);
+  } catch (err) {
+    console.error('listarValidaciones:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las validaciones' });
+  }
+};
+
+// PATCH /api/admin/validaciones/:cuidadoraId/documento
+// body: { tipo, estado: 'aprobado'|'cambios_solicitados', nota? }
+exports.revisarDocumento = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { tipo, estado, nota } = req.body;
+
+    if (!TIPOS_DOC.includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo de documento no válido' });
+    }
+    if (!['aprobado', 'cambios_solicitados'].includes(estado)) {
+      return res.status(400).json({ error: 'Estado no válido' });
+    }
+
+    const { data, error } = await supabase
+      .from('revisiones_documentos')
+      .upsert(
+        {
+          cuidadora_id: cuidadoraId,
+          tipo,
+          estado,
+          nota: estado === 'cambios_solicitados' ? (nota || null) : null,
+          revisado_at: new Date().toISOString(),
+        },
+        { onConflict: 'cuidadora_id,tipo' }
+      )
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json(data);
+  } catch (err) {
+    console.error('revisarDocumento:', err.message);
+    res.status(500).json({ error: 'No se pudo revisar el documento' });
   }
 };
 
