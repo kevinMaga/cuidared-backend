@@ -37,14 +37,71 @@ const getDashboardMetrics = async (req, res) => {
       .select('*', { count: 'exact', head: true })
       .neq('estado', 'cancelado');
 
+    // --- CURSOS ---
+    const { count: cursosCount } = await supabase
+      .from('cursos')
+      .select('*', { count: 'exact', head: true })
+      .eq('archivado', false);
+
+    const { count: modulosCount } = await supabase
+      .from('modulos')
+      .select('*', { count: 'exact', head: true })
+      .eq('archivado', false);
+
+    // --- VALIDACIONES ---
+    // Reutilizamos la misma lógica de estado que en listarValidaciones
+    const { data: cuidadoras } = await supabase
+      .from('cuidadoras')
+      .select(`
+        id, url_cedula, url_certificado_migratorio, url_record_policial,
+        url_copia_titulo, url_certificados, url_cv
+      `);
+
+    const { data: revisiones } = await supabase
+      .from('revisiones_documentos')
+      .select('*');
+
+    let valPendientes = 0;
+    let valAprobadas = 0;
+    let valCambios = 0;
+
+    (cuidadoras || []).forEach((c) => {
+      const docs = TIPOS_DOC.map((tipo) => {
+        const rev = (revisiones || []).find(
+          (r) => r.cuidadora_id === c.id && r.tipo === tipo
+        );
+        return {
+          url: c[COL_DOC[tipo]] || null,
+          estado: rev?.estado || 'pendiente',
+        };
+      });
+      const estado = estadoGeneral(docs);
+      if (estado === 'approved') valAprobadas++;
+      else if (estado === 'changes_requested') valCambios++;
+      else valPendientes++;
+    });
+
     res.json({
       cuidadoras: cuidadorasCount || 0,
       familias: empleadorasCount || 0,
       solicitudes: solicitudesCount || 0,
       servicios: serviciosCount || 0,
-    });
 
+      cursos: {
+        total: cursosCount || 0,
+        modulos: modulosCount || 0,
+        enProgreso: 0,   // pendiente: requiere tabla de progreso
+        completados: 0,  // pendiente: requiere tabla de progreso
+      },
+
+      validaciones: {
+        pendientes: valPendientes,
+        aprobadas: valAprobadas,
+        cambiosSolicitados: valCambios,
+      },
+    });
   } catch (error) {
+    console.error('getDashboardMetrics:', error.message);
     res.status(500).json({ error: 'Error al obtener métricas del dashboard' });
   }
 };

@@ -4,6 +4,8 @@ require('dotenv').config();
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const cuidadorController = require('./routes/cuidadorRoutes');
+
 
 const app = express();
 app.use(cors());
@@ -16,6 +18,7 @@ app.get('/health', (req, res) => {
 // Rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/cuidador', cuidadorController);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
