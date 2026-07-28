@@ -2,6 +2,14 @@ const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+
+async function notificarAdmins({ tipo, titulo, mensaje, solicitud_id }) {
+  const { data: admins } = await supabase.from('perfiles').select('id').eq('rol', 'admin');
+  if (!admins || admins.length === 0) return;
+  await supabase.from('notificaciones').insert(
+    admins.map((a) => ({ usuario_id: a.id, tipo, titulo, mensaje, solicitud_id }))
+  );
+}
 // POST /api/cuidador/progreso  body: { cuidadoraId, cursoId, moduloId }
 exports.marcarModuloCompletado = async (req, res) => {
   try {
@@ -69,5 +77,426 @@ exports.obtenerProgreso = async (req, res) => {
   } catch (err) {
     console.error('obtenerProgreso:', err.message);
     res.status(500).json({ error: 'No se pudo obtener el progreso' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/perfil
+exports.obtenerPerfilCuidadora = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: cuidadora, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select('*')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e1) throw e1;
+
+    const { data: perfil, error: e2 } = await supabase
+      .from('perfiles')
+      .select('nombre, correo, telefono, ciudad, provincia, avatar_url')  // 👈 agregado avatar_url
+      .eq('id', cuidadoraId)
+      .single();
+    if (e2) throw e2;
+
+    res.json({ ...cuidadora, ...perfil });
+  } catch (err) {
+    console.error('obtenerPerfilCuidadora:', err.message);
+    res.status(500).json({ error: 'No se pudo obtener el perfil' });
+  }
+};
+
+// PUT /api/cuidador/:cuidadoraId/perfil
+exports.actualizarPerfilCuidadora = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const {
+      nombre, telefono, biografia,
+      especialidades, provincia, ciudad, zonas_cobertura,
+      modalidad, tiene_licencia, idiomas, dias_disponibles,
+    } = req.body;
+
+    // Actualiza cuidadoras (solo los campos que llegaron)
+    const cambiosCuidadora = {};
+    if (biografia !== undefined) cambiosCuidadora.descripcion_estilo = biografia;
+    if (especialidades !== undefined) cambiosCuidadora.especialidades = especialidades;
+    if (provincia !== undefined) cambiosCuidadora.provincia = provincia;
+    if (zonas_cobertura !== undefined) cambiosCuidadora.zonas_cobertura = zonas_cobertura;
+    if (modalidad !== undefined) cambiosCuidadora.modalidad = modalidad;
+    if (tiene_licencia !== undefined) cambiosCuidadora.tiene_licencia = tiene_licencia;
+    if (idiomas !== undefined) cambiosCuidadora.idiomas = idiomas;
+    if (dias_disponibles !== undefined) cambiosCuidadora.dias_disponibles = dias_disponibles;
+
+    if (Object.keys(cambiosCuidadora).length > 0) {
+      const { error: e1 } = await supabase
+        .from('cuidadoras').update(cambiosCuidadora).eq('id', cuidadoraId);
+      if (e1) throw e1;
+    }
+
+    // Actualiza perfiles (nombre, teléfono, ciudad, provincia)
+    const cambiosPerfil = {};
+    if (nombre !== undefined) cambiosPerfil.nombre = nombre;
+    if (telefono !== undefined) cambiosPerfil.telefono = telefono;
+    if (ciudad !== undefined) cambiosPerfil.ciudad = ciudad;
+    if (provincia !== undefined) cambiosPerfil.provincia = provincia;
+
+    if (Object.keys(cambiosPerfil).length > 0) {
+      const { error: e2 } = await supabase
+        .from('perfiles').update(cambiosPerfil).eq('id', cuidadoraId);
+      if (e2) throw e2;
+    }
+
+    res.json({ mensaje: 'Perfil actualizado' });
+  } catch (err) {
+    console.error('actualizarPerfilCuidadora:', err.message);
+    res.status(500).json({ error: 'No se pudo actualizar el perfil' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/oportunidades
+exports.obtenerOportunidades = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .select(`
+        id, estado, creado_en,
+        familiares!familiar_id ( id, nombre, parentesco, edad, tipos_cuidado, condiciones_especificas, dias_disponibles ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) )
+      `)
+      .eq('cuidadora_id', cuidadoraId)
+      .eq('estado', 'en_gestion')
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerOportunidades:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las oportunidades' });
+  }
+};
+
+// PUT /api/cuidador/oportunidades/:id/responder  body: { respuesta: 'aceptar' | 'rechazar' }
+exports.responderOportunidad = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { respuesta } = req.body;
+    if (!['aceptar', 'rechazar'].includes(respuesta)) {
+      return res.status(400).json({ error: 'Respuesta inválida' });
+    }
+    const nuevoEstado = respuesta === 'aceptar' ? 'aceptada_cuidadora' : 'rechazada_cuidadora';
+
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .update({ estado: nuevoEstado })
+      .eq('id', id)
+      .eq('estado', 'en_gestion') // evita responder dos veces
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(409).json({ error: 'La solicitud ya no está en gestión' });
+
+    await notificarAdmins({
+      tipo: 'oportunidad',
+      titulo: nuevoEstado === 'aceptada_cuidadora' ? 'Cuidadora aceptó una oportunidad' : 'Cuidadora rechazó una oportunidad',
+      mensaje: nuevoEstado === 'aceptada_cuidadora' ? 'Una cuidadora aceptó la oportunidad.' : 'Una cuidadora rechazó la oportunidad.',
+      solicitud_id: id,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('responderOportunidad:', err.message);
+    res.status(500).json({ error: 'No se pudo responder la oportunidad' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/oportunidades-aceptadas
+exports.obtenerOportunidadesAceptadas = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .select(`
+        id, estado, familia_confirmo, cuidadora_confirmo,
+        familiares!familiar_id ( id, nombre, edad, tipos_cuidado ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) )
+      `)
+      .eq('cuidadora_id', cuidadoraId)
+      .eq('estado', 'aceptada_cuidadora')
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerOportunidadesAceptadas:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las oportunidades' });
+  }
+};
+
+// PUT /api/cuidador/oportunidades/:id/confirmar
+exports.confirmarCuidadora = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .update({ cuidadora_confirmo: true })
+      .eq('id', id)
+      .select().single();
+    if (error) throw error;
+
+    await notificarAdmins({
+      tipo: 'confirmacion',
+      titulo: 'Cuidadora confirmó el servicio',
+      mensaje: 'Una cuidadora confirmó su parte del servicio.',
+      solicitud_id: id,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('confirmarCuidadora:', err.message);
+    res.status(500).json({ error: 'No se pudo confirmar' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/servicios
+exports.obtenerServiciosCuidador = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { data, error } = await supabase
+      .from('servicios')
+      .select(`
+        id, titulo, descripcion, estado, creado_en,
+        familiares!familiar_id ( id, nombre, dias_disponibles ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) )
+      `)
+      .eq('cuidadora_id', cuidadoraId)
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerServiciosCuidador:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los servicios' });
+  }
+};
+
+// GET /api/cuidador/servicio/:id
+exports.obtenerServicioCuidadorDetalle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('servicios')
+      .select(`
+        id, titulo, descripcion, estado, creado_en,
+        familiares!familiar_id ( id, nombre, dias_disponibles ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) )
+      `)
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerServicioCuidadorDetalle:', err.message);
+    res.status(500).json({ error: 'No se pudo obtener el servicio' });
+  }
+};
+
+// GET /api/cuidador/solicitudes/:solicitudId/mensajes
+exports.obtenerMensajesCuidador = async (req, res) => {
+  try {
+    const { solicitudId } = req.params;
+    const { data: conv } = await supabase
+      .from('conversaciones').select('id').eq('solicitud_id', solicitudId).eq('tipo', 'cuidadora').maybeSingle();
+    if (!conv) return res.json([]);
+    const { data, error } = await supabase
+      .from('mensajes').select('*').eq('conversacion_id', conv.id).order('creado_en', { ascending: true });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerMensajesCuidador:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los mensajes' });
+  }
+};
+
+// POST /api/cuidador/solicitudes/:solicitudId/mensajes  body: { texto }
+exports.enviarMensajeCuidador = async (req, res) => {
+  try {
+    const { solicitudId } = req.params;
+    const { texto } = req.body;
+    if (!texto) return res.status(400).json({ error: 'Falta el texto' });
+    const { data: conv, error: e1 } = await supabase
+      .from('conversaciones').select('id').eq('solicitud_id', solicitudId).eq('tipo', 'cuidadora').single();
+    if (e1) throw e1;
+    const { data, error: e2 } = await supabase
+      .from('mensajes').insert({ conversacion_id: conv.id, remitente: 'cuidadora', texto }).select().single();
+    if (e2) throw e2;
+
+    await notificarAdmins({
+      tipo: 'mensaje',
+      titulo: 'Nuevo mensaje de una cuidadora',
+      mensaje: texto,
+      solicitud_id: solicitudId,
+    });
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('enviarMensajeCuidador:', err.message);
+    res.status(500).json({ error: 'No se pudo enviar el mensaje' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/conversaciones
+exports.obtenerConversacionesCuidador = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: solicitudes, error: e1 } = await supabase
+      .from('solicitudes_conexion')
+      .select(`
+        id, estado,
+        familiares!familiar_id ( nombre ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre ) )
+      `)
+      .eq('cuidadora_id', cuidadoraId);
+    if (e1) throw e1;
+    if (!solicitudes || solicitudes.length === 0) return res.json([]);
+
+    const solicitudIds = solicitudes.map((s) => s.id);
+
+    const { data: conversaciones, error: e2 } = await supabase
+      .from('conversaciones')
+      .select('id, solicitud_id')
+      .in('solicitud_id', solicitudIds)
+      .eq('tipo', 'cuidadora');
+    if (e2) throw e2;
+    if (!conversaciones || conversaciones.length === 0) return res.json([]);
+
+    const convIds = conversaciones.map((c) => c.id);
+
+    const { data: mensajes, error: e3 } = await supabase
+      .from('mensajes')
+      .select('conversacion_id, texto, creado_en')
+      .in('conversacion_id', convIds)
+      .order('creado_en', { ascending: false });
+    if (e3) throw e3;
+
+    const resultado = conversaciones.map((conv) => {
+      const solicitud = solicitudes.find((s) => s.id === conv.solicitud_id);
+      const ultimoMensaje = (mensajes || []).find((m) => m.conversacion_id === conv.id);
+      return {
+        solicitudId: solicitud.id,
+        estado: solicitud.estado,
+        familiarNombre: solicitud.familiares?.nombre || '',
+        familiaNombre: solicitud.empleadoras?.perfiles?.nombre || 'Familia',
+        ultimoMensaje: ultimoMensaje?.texto || '',
+        ultimoMensajeFecha: ultimoMensaje?.creado_en || null,
+      };
+    });
+
+    resultado.sort((a, b) => new Date(b.ultimoMensajeFecha || 0) - new Date(a.ultimoMensajeFecha || 0));
+    res.json(resultado);
+  } catch (err) {
+    console.error('obtenerConversacionesCuidador:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las conversaciones' });
+  }
+};
+
+const PDFDocument = require('pdfkit');
+
+// GET /api/cuidador/:cuidadoraId/cv
+exports.generarCV = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: cuidadora, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select('*')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e1) throw e1;
+
+    const { data: perfil, error: e2 } = await supabase
+      .from('perfiles')
+      .select('nombre, correo, telefono, ciudad, provincia')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e2) throw e2;
+
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CV-${(perfil.nombre || 'cuidadora').replace(/\s+/g, '_')}.pdf"`);
+    doc.pipe(res);
+
+    // Encabezado
+    doc.fontSize(22).fillColor('#1a1a4b').text(perfil.nombre || 'Cuidadora', { align: 'left' });
+    doc.fontSize(12).fillColor('#555').text('Cuidadora Profesional - Cuida Red');
+    doc.moveDown(0.5);
+    doc.fontSize(10).fillColor('#333');
+    if (perfil.correo) doc.text(`Correo: ${perfil.correo}`);
+    if (perfil.telefono) doc.text(`Teléfono: ${perfil.telefono}`);
+    if (perfil.ciudad || perfil.provincia) doc.text(`Ubicación: ${[perfil.ciudad, perfil.provincia].filter(Boolean).join(', ')}`);
+    doc.moveDown();
+
+    doc.strokeColor('#cccccc').moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown();
+
+    // Especialidades
+    doc.fontSize(14).fillColor('#1a1a4b').text('Especialidades');
+    doc.fontSize(11).fillColor('#333');
+    doc.text((cuidadora.especialidades || []).join(', ') || 'No especificado');
+    doc.moveDown();
+
+    // Biografía
+    doc.fontSize(14).fillColor('#1a1a4b').text('Biografía Profesional');
+    doc.fontSize(11).fillColor('#333');
+    doc.text(cuidadora.descripcion_estilo || 'No especificado', { align: 'justify' });
+    doc.moveDown();
+
+    // Disponibilidad
+    doc.fontSize(14).fillColor('#1a1a4b').text('Disponibilidad');
+    doc.fontSize(11).fillColor('#333');
+    doc.text(`Días: ${(cuidadora.dias_disponibles || []).join(', ') || 'No especificado'}`);
+    doc.text(`Modalidad: ${(cuidadora.modalidad || []).join(', ') || 'No especificado'}`);
+    doc.moveDown();
+
+    // Experiencia
+    doc.fontSize(14).fillColor('#1a1a4b').text('Experiencia y Formación');
+    doc.fontSize(11).fillColor('#333');
+    doc.text(`Años de experiencia: ${cuidadora.años_experiencia || 'No especificado'}`);
+    doc.text(`Nivel de formación: ${cuidadora.nivel_formacion || 'No especificado'}`);
+    if (cuidadora.tiene_licencia) doc.text('Cuenta con licencia/certificación profesional.');
+    doc.moveDown();
+
+    // Calificación
+    if (cuidadora.calificacion_promedio) {
+      doc.fontSize(14).fillColor('#1a1a4b').text('Calificación Cuida Red');
+      doc.fontSize(11).fillColor('#333');
+      doc.text(`${cuidadora.calificacion_promedio} / 5`);
+    }
+
+    doc.end();
+  } catch (err) {
+    console.error('generarCV:', err.message);
+    res.status(500).json({ error: 'No se pudo generar el CV' });
+  }
+};
+
+// GET /api/cuidador/:cuidadoraId/resenas
+exports.obtenerResenasCuidador = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { data, error } = await supabase
+      .from('resenas')
+      .select(`
+        id, calificacion, comentario, tag, creado_en,
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre ) )
+      `)
+      .eq('cuidadora_id', cuidadoraId)
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+
+    const promedio = data.length
+      ? Math.round((data.reduce((sum, r) => sum + r.calificacion, 0) / data.length) * 10) / 10
+      : 0;
+
+    res.json({ resenas: data, promedio, total: data.length });
+  } catch (err) {
+    console.error('obtenerResenasCuidador:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las reseñas' });
   }
 };

@@ -364,6 +364,7 @@ exports.listarValidaciones = async (req, res) => {
         id: c.id,
         caregiverId: c.id,
         caregiverName: c.perfiles?.nombre || 'Sin nombre',
+        caregiverAvatarUrl: c.perfiles?.avatar_url || null,
         status: estadoGeneral(docs),
         uploadedDocs: subidos,
         totalDocs: TIPOS_DOC.length,
@@ -408,10 +409,256 @@ exports.revisarDocumento = async (req, res) => {
       .single();
     if (error) throw error;
 
+    // dentro de revisarDocumento, antes del res.json(data)
+    await supabase.from('notificaciones').insert({
+      usuario_id: cuidadoraId,
+      tipo: 'documento',
+      titulo: estado === 'aprobado' ? 'Documento aprobado' : 'Cambios solicitados en un documento',
+      mensaje: estado === 'aprobado'
+        ? `Tu documento fue aprobado.`
+        : `Se solicitaron cambios en tu documento${nota ? `: ${nota}` : '.'}`,
+    });
+
     res.json(data);
   } catch (err) {
     console.error('revisarDocumento:', err.message);
     res.status(500).json({ error: 'No se pudo revisar el documento' });
+  }
+};
+
+// GET /api/admin/solicitudes
+exports.obtenerSolicitudes = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .select(`
+        id, estado, familia_confirmo, cuidadora_confirmo, creado_en,
+        familiares!familiar_id ( id, nombre, parentesco, edad, tipos_cuidado, condiciones_especificas ),
+        empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) ),
+        cuidadoras!cuidadora_id ( id, especialidades, calificacion_promedio, perfiles!inner ( nombre ) )
+      `)
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerSolicitudes:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las solicitudes' });
+  }
+};
+
+// PUT /api/admin/solicitudes/:id/tomar
+exports.tomarSolicitud = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: solicitud, error } = await supabase
+      .from('solicitudes_conexion')
+      .update({ estado: 'en_gestion' })
+      .eq('id', id)
+      .eq('estado', 'nueva')
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!solicitud) return res.status(409).json({ error: 'La solicitud ya no está en estado nueva' });
+
+    // Crear las dos conversaciones
+    const { data: conversaciones, error: eConv } = await supabase
+      .from('conversaciones')
+      .insert([
+        { solicitud_id: id, tipo: 'familia' },
+        { solicitud_id: id, tipo: 'cuidadora' },
+      ])
+      .select();
+    if (eConv) throw eConv;
+
+    const convFamilia = conversaciones.find((c) => c.tipo === 'familia');
+    const convCuidadora = conversaciones.find((c) => c.tipo === 'cuidadora');
+
+    // Mensajes automáticos iniciales
+    const { error: eMsg } = await supabase.from('mensajes').insert([
+      {
+        conversacion_id: convFamilia.id,
+        remitente: 'sistema',
+        texto: 'Hola, soy el equipo de Cuida Red. Estamos coordinando el contacto con la cuidadora para tu familiar. Te mantendremos informado.',
+      },
+      {
+        conversacion_id: convCuidadora.id,
+        remitente: 'sistema',
+        texto: 'Hola, soy el equipo de Cuida Red. Tienes una nueva oportunidad disponible. Cualquier duda, contáctanos por aquí.',
+      },
+    ]);
+    if (eMsg) throw eMsg;
+
+    // 👇 AGREGADO: notificación para la cuidadora
+    await supabase.from('notificaciones').insert({
+      usuario_id: solicitud.cuidadora_id,
+      tipo: 'oportunidad',
+      titulo: 'Nueva oportunidad disponible',
+      mensaje: 'Tienes una nueva familia interesada en tu perfil.',
+      solicitud_id: id,
+    });
+
+    res.json(solicitud);
+  } catch (err) {
+    console.error('tomarSolicitud:', err.message);
+    res.status(500).json({ error: 'No se pudo tomar la solicitud' });
+  }
+};
+
+// POST /api/admin/solicitudes/:solicitudId/crear-servicio
+exports.crearServicio = async (req, res) => {
+  try {
+    const { solicitudId } = req.params;
+
+    const { data: solicitud, error: e1 } = await supabase
+      .from('solicitudes_conexion')
+      .select('*')
+      .eq('id', solicitudId)
+      .single();
+    if (e1) throw e1;
+    if (!solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+    if (!(solicitud.familia_confirmo && solicitud.cuidadora_confirmo)) {
+      return res.status(400).json({ error: 'Ambas partes deben confirmar antes de crear el servicio' });
+    }
+    if (solicitud.estado === 'servicio_creado') {
+      return res.status(409).json({ error: 'El servicio ya fue creado' });
+    }
+
+    const { titulo, descripcion } = req.body;
+
+    const { data: servicio, error: e2 } = await supabase
+      .from('servicios')
+      .insert({
+        solicitud_id: solicitud.id,
+        empleadora_id: solicitud.empleadora_id,
+        familiar_id: solicitud.familiar_id,
+        cuidadora_id: solicitud.cuidadora_id,
+        titulo: titulo || 'Servicio de cuidado',
+        descripcion: descripcion || '',
+        estado: 'en_coordinacion', // ← corregido
+      })
+      .select().single();
+    if (e2) throw e2;
+
+    const { error: e3 } = await supabase
+      .from('solicitudes_conexion')
+      .update({ estado: 'servicio_creado' })
+      .eq('id', solicitud.id);
+    if (e3) throw e3;
+
+    // dentro de crearServicio, antes del res.status(201).json(servicio)
+    await supabase.from('notificaciones').insert([
+      {
+        usuario_id: solicitud.empleadora_id,
+        tipo: 'servicio',
+        titulo: 'Servicio confirmado',
+        mensaje: 'Tu servicio de cuidado ha sido confirmado por Cuida Red.',
+        solicitud_id: solicitud.id,
+      },
+      {
+        usuario_id: solicitud.cuidadora_id,
+        tipo: 'servicio',
+        titulo: 'Servicio confirmado',
+        mensaje: 'Tu servicio de cuidado ha sido confirmado por Cuida Red.',
+        solicitud_id: solicitud.id,
+      },
+    ]);
+
+    res.status(201).json(servicio);
+  } catch (err) {
+    console.error('crearServicio:', err.message);
+    res.status(500).json({ error: 'No se pudo crear el servicio' });
+  }
+};
+// GET /api/admin/solicitudes/:solicitudId/conversacion/:tipo/mensajes
+exports.obtenerMensajesAdmin = async (req, res) => {
+  try {
+    const { solicitudId, tipo } = req.params;
+    const { data: conv, error: e1 } = await supabase
+      .from('conversaciones').select('id').eq('solicitud_id', solicitudId).eq('tipo', tipo).maybeSingle();
+    if (e1) throw e1;
+    if (!conv) return res.json([]);
+
+    const { data, error: e2 } = await supabase
+      .from('mensajes').select('*').eq('conversacion_id', conv.id).order('creado_en', { ascending: true });
+    if (e2) throw e2;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerMensajesAdmin:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los mensajes' });
+  }
+};
+
+// POST /api/admin/solicitudes/:solicitudId/conversacion/:tipo/mensajes  body: { texto }
+exports.enviarMensajeAdmin = async (req, res) => {
+  try {
+    const { solicitudId, tipo } = req.params;
+    const { texto } = req.body;
+    if (!texto) return res.status(400).json({ error: 'Falta el texto' });
+
+    const { data: conv, error: e1 } = await supabase
+      .from('conversaciones').select('id').eq('solicitud_id', solicitudId).eq('tipo', tipo).single();
+    if (e1) throw e1;
+
+    const { data, error: e2 } = await supabase
+      .from('mensajes').insert({ conversacion_id: conv.id, remitente: 'admin', texto }).select().single();
+    if (e2) throw e2;
+
+    // 👇 AGREGADO: notificación para el destinatario
+    const { data: solicitud } = await supabase
+      .from('solicitudes_conexion')
+      .select('empleadora_id, cuidadora_id')
+      .eq('id', solicitudId)
+      .single();
+    if (solicitud) {
+      const destinatarioId = tipo === 'familia' ? solicitud.empleadora_id : solicitud.cuidadora_id;
+      await supabase.from('notificaciones').insert({
+        usuario_id: destinatarioId,
+        tipo: 'mensaje',
+        titulo: 'Nuevo mensaje de Cuida Red',
+        mensaje: texto,
+        solicitud_id: solicitudId,
+      });
+    }
+
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('enviarMensajeAdmin:', err.message);
+    res.status(500).json({ error: 'No se pudo enviar el mensaje' });
+  }
+};
+
+// PUT /api/admin/solicitudes/:solicitudId/completar-servicio
+exports.completarServicio = async (req, res) => {
+  try {
+    const { solicitudId } = req.params;
+    const { data: servicio, error: e1 } = await supabase
+      .from('servicios')
+      .select('id, empleadora_id')
+      .eq('solicitud_id', solicitudId)
+      .single();
+    if (e1) throw e1;
+    if (!servicio) return res.status(404).json({ error: 'Servicio no encontrado' });
+
+    const { data, error: e2 } = await supabase
+      .from('servicios')
+      .update({ estado: 'completado' })
+      .eq('id', servicio.id)
+      .select().single();
+    if (e2) throw e2;
+
+    await supabase.from('notificaciones').insert({
+      usuario_id: servicio.empleadora_id,
+      tipo: 'servicio',
+      titulo: 'Servicio completado',
+      mensaje: 'Tu servicio de cuidado ha finalizado. Puedes dejar una reseña.',
+      solicitud_id: solicitudId,
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('completarServicio:', err.message);
+    res.status(500).json({ error: 'No se pudo completar el servicio' });
   }
 };
 

@@ -2,7 +2,10 @@ const express = require('express');
 const router = express.Router();
 const {
   listarCursos, obtenerCurso, crearCurso, editarCurso, archivarCurso,
-  crearModulo, editarModulo, archivarModulo, subirVideo, getDashboardMetrics, listarValidaciones, revisarDocumento,
+  crearModulo, editarModulo, enviarMensajeAdmin, obtenerMensajesAdmin,
+  obtenerSolicitudes, tomarSolicitud, crearServicio, archivarModulo, 
+  subirVideo, getDashboardMetrics, listarValidaciones, revisarDocumento,
+  completarServicio,
 } = require('../controllers/adminController');
 const multer = require('multer');
 const { subirDocumento } = require('../controllers/authController');
@@ -29,7 +32,13 @@ router.post('/upload-video', upload.single('video'), subirVideo);
 
 router.get('/validaciones', listarValidaciones);
 router.patch('/validaciones/:cuidadoraId/documento', revisarDocumento);
+router.get('/solicitudes', obtenerSolicitudes);
+router.put('/solicitudes/:id/tomar', tomarSolicitud);
+router.post('/solicitudes/:solicitudId/crear-servicio', crearServicio);
 
+router.get('/solicitudes/:solicitudId/conversacion/:tipo/mensajes', obtenerMensajesAdmin);
+router.post('/solicitudes/:solicitudId/conversacion/:tipo/mensajes', enviarMensajeAdmin);
+router.put('/solicitudes/:solicitudId/completar-servicio', completarServicio);
 
 module.exports = router;
 

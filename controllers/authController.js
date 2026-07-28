@@ -61,8 +61,10 @@ const login = async (req, res) => {
       password: password,
     });
 
-    if (error) return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
-
+    if (error) {
+      console.error('Error de login:', error.message, error.status);
+      return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+    }
     // Obtener perfil con el rol
     const { data: perfil } = await supabase
       .from('perfiles')
@@ -262,5 +264,53 @@ const crearAdmin = async (req, res) => {
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 };
+const completarPerfilFamilia = async (req, res) => {
+  const { userId, datos } = req.body;
 
-module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin, subirDocumento };
+  try {
+    // 1. Guardar datos de la empleadora
+    const { error: empError } = await supabase
+      .from('empleadoras')
+      .update({
+        tipo_registro: datos.registerType || 'personal',
+        cedula: datos.idNumber,
+        direccion: datos.address,
+        sector: datos.sector,
+        composicion_hogar: datos.household,
+        nombre_empresa: datos.companyName || null,
+        referencia_direccion: datos.addressReference,
+        tipo_vivienda: datos.housingType,
+        caracteristicas_vivienda: datos.housingDetails,
+        tiene_mascotas: datos.hasPets ?? false,
+        acepto_terminos: datos.termsAccepted ?? false,
+      })
+      .eq('id', userId);
+    if (empError) return res.status(400).json({ error: empError.message });
+
+    // 2. Actualizar ciudad/provincia en perfiles
+    await supabase
+      .from('perfiles')
+      .update({ ciudad: datos.city, provincia: datos.province })
+      .eq('id', userId);
+
+    // 3. Insertar los familiares (uno por cada uno)
+    if (Array.isArray(datos.familyMembers) && datos.familyMembers.length > 0) {
+      const filas = datos.familyMembers.map((m) => ({
+        empleadora_id: userId,
+        nombre: m.name,
+        parentesco: m.relationship,
+        edad: m.age ? parseInt(m.age, 10) : null,
+        tipos_cuidado: m.careTypes || [],
+      }));
+      const { error: famError } = await supabase.from('familiares').insert(filas);
+      if (famError) return res.status(400).json({ error: famError.message });
+    }
+
+    res.json({ mensaje: 'Perfil de familia completado correctamente' });
+  } catch (error) {
+    console.error('completarPerfilFamilia:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin, subirDocumento,completarPerfilFamilia };
