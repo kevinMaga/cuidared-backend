@@ -435,7 +435,7 @@ exports.obtenerSolicitudes = async (req, res) => {
         id, estado, familia_confirmo, cuidadora_confirmo, creado_en,
         familiares!familiar_id ( id, nombre, parentesco, edad, tipos_cuidado, condiciones_especificas ),
         empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) ),
-        cuidadoras!cuidadora_id ( id, especialidades, calificacion_promedio, perfiles!inner ( nombre ) )
+        cuidadoras!cuidadora_id ( id, especialidades, calificacion_promedio, perfiles!inner ( nombre, avatar_url ) )
       `)
       .order('creado_en', { ascending: false });
     if (error) throw error;

@@ -500,3 +500,134 @@ exports.obtenerResenasCuidador = async (req, res) => {
     res.status(500).json({ error: 'No se pudieron obtener las reseñas' });
   }
 };
+
+// GET /api/cuidador/:cuidadoraId/puntaje
+exports.obtenerPuntaje = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: cuidadora, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select('nivel_formacion, años_experiencia, especialidades')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e1) throw e1;
+
+    // --- 1. Formación profesional formal (0-25) ---
+    const FORMACION_PUNTOS = { ninguna: 0, basicos_externos: 5, tecnico: 15, universitario: 25 };
+    const formacion = FORMACION_PUNTOS[cuidadora.nivel_formacion] ?? 0;
+
+    // --- 2. Certificación Cuida Red (0-25), según cursos completados ---
+    // Trae todos los cursos activos con sus módulos, y el progreso de la cuidadora
+    const { data: cursos, error: e2 } = await supabase
+      .from('cursos')
+      .select('id, categoria, archivado, modulos(id, archivado)')
+      .eq('archivado', false);
+    if (e2) throw e2;
+
+    const { data: progreso, error: e3 } = await supabase
+      .from('progreso_modulos')
+      .select('curso_id, modulo_id')
+      .eq('cuidadora_id', cuidadoraId);
+    if (e3) throw e3;
+
+    function cursoCompletado(curso) {
+      const modulosActivos = (curso.modulos || []).filter((m) => !m.archivado);
+      if (modulosActivos.length === 0) return false;
+      const completadosDeEsteCurso = (progreso || []).filter((p) => p.curso_id === curso.id);
+      return modulosActivos.every((m) => completadosDeEsteCurso.some((p) => p.modulo_id === m.id));
+    }
+
+    const elementalCompletado = (cursos || []).some((c) => c.categoria === 'obligatorio' && cursoCompletado(c));
+    const cursosExpertosCompletados = (cursos || []).filter((c) => c.categoria === 'opcional' && cursoCompletado(c)).length;
+
+    let certificacion = 0;
+    if (elementalCompletado) {
+      if (cursosExpertosCompletados >= 3) certificacion = 25;
+      else if (cursosExpertosCompletados === 2) certificacion = 20;
+      else if (cursosExpertosCompletados === 1) certificacion = 15;
+      else certificacion = 10;
+    }
+
+    // --- 3. Experiencia profesional (0-25) ---
+    const anos = cuidadora.años_experiencia || 0;
+    let experiencia = 0;
+    if (anos > 10) experiencia = 25;
+    else if (anos >= 3) experiencia = 15;
+    else if (anos >= 1) experiencia = 10;
+    else experiencia = 0;
+
+    // --- 4. Habilidades adicionales (0-25) ---
+    const HABILIDADES_ADICIONALES = ['Arte', 'Deportes', 'Estimulación cognitiva', 'Idiomas', 'Tecnología básica'];
+    const numHabilidades = (cuidadora.especialidades || []).filter((esp) =>
+      HABILIDADES_ADICIONALES.includes(esp)
+    ).length;
+
+    let habilidades = 0;
+    if (numHabilidades >= 5) habilidades = 25;
+    else if (numHabilidades >= 3) habilidades = 15;
+    else if (numHabilidades >= 1) habilidades = 5;
+    else habilidades = 0;
+
+    const total = formacion + certificacion + experiencia + habilidades;
+
+    res.json({
+      total,
+      breakdown: [
+        { label: 'Formación formal', value: formacion, max: 25 },
+        { label: 'Certificación Cuida Red', value: certificacion, max: 25 },
+        { label: 'Experiencia', value: experiencia, max: 25 },
+        { label: 'Habilidades', value: habilidades, max: 25 },
+      ],
+    });
+  } catch (err) {
+    console.error('obtenerPuntaje:', err.message);
+    res.status(500).json({ error: 'No se pudo calcular el puntaje' });
+  }
+};
+
+const COL_DOC = {
+  cedula: 'url_cedula',
+  migratorio: 'url_certificado_migratorio',
+  record_policial: 'url_record_policial',
+  titulo: 'url_copia_titulo',
+  certificaciones: 'url_certificados',
+  cv: 'url_cv',
+};
+
+// GET /api/cuidador/:cuidadoraId/documentos
+exports.obtenerDocumentos = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: cuidadora, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select('url_cedula, url_certificado_migratorio, url_record_policial, url_copia_titulo, url_certificados, url_cv')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e1) throw e1;
+
+    const { data: revisiones, error: e2 } = await supabase
+      .from('revisiones_documentos')
+      .select('*')
+      .eq('cuidadora_id', cuidadoraId);
+    if (e2) throw e2;
+
+    const resultado = Object.keys(COL_DOC).map((tipo) => {
+      const url = cuidadora[COL_DOC[tipo]] || null;
+      const rev = (revisiones || []).find((r) => r.tipo === tipo);
+      return {
+        tipo,
+        url,
+        filename: url ? decodeURIComponent(url.split('/').pop()) : null,
+        estado: rev?.estado || 'pendiente',
+        nota: rev?.nota || null,
+      };
+    });
+
+    res.json(resultado);
+  } catch (err) {
+    console.error('obtenerDocumentos:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los documentos' });
+  }
+};

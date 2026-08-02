@@ -14,7 +14,8 @@ const {
   obtenerMensajesCuidador,
   enviarMensajeCuidador,
   obtenerConversacionesCuidador,
-  generarCV, obtenerResenasCuidador
+  generarCV, obtenerResenasCuidador,
+  obtenerPuntaje, obtenerDocumentos,
 } = require('../controllers/cuidadorController');
 
 router.post('/progreso', marcarModuloCompletado);
@@ -32,5 +33,7 @@ router.post('/solicitudes/:solicitudId/mensajes', enviarMensajeCuidador);
 router.get('/:cuidadoraId/conversaciones', obtenerConversacionesCuidador);
 router.get('/:cuidadoraId/cv', generarCV);
 router.get('/:cuidadoraId/resenas', obtenerResenasCuidador);
+router.get('/:cuidadoraId/puntaje', obtenerPuntaje);
+router.get('/:cuidadoraId/documentos', obtenerDocumentos);
 
 module.exports = router;

@@ -300,7 +300,7 @@ exports.obtenerServiciosFamilia = async (req, res) => {
       .select(`
         id, titulo, descripcion, estado, creado_en,
         familiares!familiar_id ( id, nombre, dias_disponibles ),
-        cuidadoras!cuidadora_id ( id, especialidades, perfiles!inner ( nombre ) )
+        cuidadoras!cuidadora_id ( id, especialidades, perfiles!inner ( nombre, avatar_url ) )
       `)
       .eq('empleadora_id', empleadoraId)
       .order('creado_en', { ascending: false });

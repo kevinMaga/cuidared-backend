@@ -301,6 +301,9 @@ const completarPerfilFamilia = async (req, res) => {
         parentesco: m.relationship,
         edad: m.age ? parseInt(m.age, 10) : null,
         tipos_cuidado: m.careTypes || [],
+        condiciones_especificas: m.conditions || null,
+        dias_disponibles: m.schedule || [],
+        alcance_servicio: m.taskScope || 'solo_cuidado',
       }));
       const { error: famError } = await supabase.from('familiares').insert(filas);
       if (famError) return res.status(400).json({ error: famError.message });
