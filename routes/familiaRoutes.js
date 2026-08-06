@@ -3,7 +3,7 @@ const router = express.Router();
 const { obtenerPerfilFamilia, obtenerConversacionesFamilia, 
     enviarMensajeFamilia, obtenerMensajesFamilia, obtenerServicioFamiliaDetalle, 
     obtenerServiciosFamilia, confirmarFamilia, expresarInteres, 
-    obtenerSolicitudesPendientes, buscarCuidadoras, eliminarFamiliar, 
+    obtenerSolicitudesPendientes, obtenerSolicitudesFamilia, buscarCuidadoras, eliminarFamiliar, 
     agregarFamiliar, editarFamiliar, obtenerFamiliar, actualizarPerfilFamilia,
     obtenerResenaServicio, crearResena,
 } = require('../controllers/familiaController');
@@ -16,6 +16,7 @@ router.get('/familiar/:familiarId', obtenerFamiliar);
 router.put('/:empleadoraId/perfil', actualizarPerfilFamilia);
 router.get('/cuidadoras', buscarCuidadoras);
 router.post('/interes', expresarInteres);
+router.get('/:empleadoraId/solicitudes', obtenerSolicitudesFamilia);
 router.get('/:empleadoraId/solicitudes-pendientes', obtenerSolicitudesPendientes);
 router.put('/solicitudes/:id/confirmar', confirmarFamilia);
 router.get('/:empleadoraId/servicios', obtenerServiciosFamilia);

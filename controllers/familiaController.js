@@ -267,6 +267,29 @@ exports.obtenerSolicitudesPendientes = async (req, res) => {
   }
 };
 
+// GET /api/familia/:empleadoraId/solicitudes
+// Solicitudes activas de la familia (antes de convertirse en servicio).
+exports.obtenerSolicitudesFamilia = async (req, res) => {
+  try {
+    const { empleadoraId } = req.params;
+    const { data, error } = await supabase
+      .from('solicitudes_conexion')
+      .select(`
+        id, estado, familia_confirmo, cuidadora_confirmo, creado_en,
+        familiares!familiar_id ( id, nombre ),
+        cuidadoras!cuidadora_id ( id, especialidades, perfiles!inner ( nombre, avatar_url ) )
+      `)
+      .eq('empleadora_id', empleadoraId)
+      .in('estado', ['nueva', 'en_gestion', 'aceptada_cuidadora'])
+      .order('creado_en', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('obtenerSolicitudesFamilia:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las solicitudes' });
+  }
+};
+
 // PUT /api/familia/solicitudes/:id/confirmar
 exports.confirmarFamilia = async (req, res) => {
   try {
