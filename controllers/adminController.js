@@ -524,7 +524,7 @@ exports.crearServicio = async (req, res) => {
       return res.status(409).json({ error: 'El servicio ya fue creado' });
     }
 
-    const { titulo, descripcion } = req.body;
+    const { titulo, descripcion, horario } = req.body;
 
     const { data: servicio, error: e2 } = await supabase
       .from('servicios')
@@ -535,7 +535,8 @@ exports.crearServicio = async (req, res) => {
         cuidadora_id: solicitud.cuidadora_id,
         titulo: titulo || 'Servicio de cuidado',
         descripcion: descripcion || '',
-        estado: 'en_coordinacion', // ← corregido
+        horario: horario || null,
+        estado: 'en_coordinacion',
       })
       .select().single();
     if (e2) throw e2;
@@ -659,6 +660,39 @@ exports.completarServicio = async (req, res) => {
   } catch (err) {
     console.error('completarServicio:', err.message);
     res.status(500).json({ error: 'No se pudo completar el servicio' });
+  }
+};
+
+exports.actualizarServicio = async (req, res) => {
+  try {
+    const { solicitudId } = req.params;
+    const { titulo, descripcion, horario } = req.body;
+
+    const { data: servicio, error: e1 } = await supabase
+      .from('servicios')
+      .select('id')
+      .eq('solicitud_id', solicitudId)
+      .maybeSingle();
+    if (e1) throw e1;
+    if (!servicio) return res.status(404).json({ error: 'Servicio no encontrado' });
+
+    const updates = {};
+    if (titulo !== undefined) updates.titulo = titulo;
+    if (descripcion !== undefined) updates.descripcion = descripcion;
+    if (horario !== undefined) updates.horario = horario;
+
+    const { data, error: e2 } = await supabase
+      .from('servicios')
+      .update(updates)
+      .eq('id', servicio.id)
+      .select()
+      .single();
+    if (e2) throw e2;
+
+    res.json(data);
+  } catch (err) {
+    console.error('actualizarServicio:', err.message);
+    res.status(500).json({ error: 'No se pudo actualizar el servicio' });
   }
 };
 

@@ -5,7 +5,7 @@ const {
   crearModulo, editarModulo, enviarMensajeAdmin, obtenerMensajesAdmin,
   obtenerSolicitudes, tomarSolicitud, crearServicio, archivarModulo, 
   subirVideo, getDashboardMetrics, listarValidaciones, revisarDocumento,
-  completarServicio,
+  completarServicio, actualizarServicio,
 } = require('../controllers/adminController');
 const multer = require('multer');
 const { subirDocumento } = require('../controllers/authController');
@@ -39,6 +39,7 @@ router.post('/solicitudes/:solicitudId/crear-servicio', crearServicio);
 router.get('/solicitudes/:solicitudId/conversacion/:tipo/mensajes', obtenerMensajesAdmin);
 router.post('/solicitudes/:solicitudId/conversacion/:tipo/mensajes', enviarMensajeAdmin);
 router.put('/solicitudes/:solicitudId/completar-servicio', completarServicio);
+router.put('/solicitudes/:solicitudId/editar-servicio', actualizarServicio);
 
 module.exports = router;
 

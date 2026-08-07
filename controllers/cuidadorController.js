@@ -261,7 +261,7 @@ exports.obtenerServiciosCuidador = async (req, res) => {
     const { data, error } = await supabase
       .from('servicios')
       .select(`
-        id, titulo, descripcion, estado, creado_en,
+        id, titulo, descripcion, horario, estado, creado_en,
         familiares!familiar_id ( id, nombre, dias_disponibles ),
         empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad, avatar_url ) )
       `)
