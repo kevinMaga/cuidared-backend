@@ -316,4 +316,178 @@ const completarPerfilFamilia = async (req, res) => {
   }
 };
 
-module.exports = { registro, login, logout, completarPerfilCuidadora, crearAdmin, subirDocumento,completarPerfilFamilia };
+// 1. SOLICITAR CÓDIGO DE RECUPERACIÓN (6 DÍGITOS)
+const solicitarRecuperacion = async (req, res) => {
+  const { correo } = req.body;
+
+  if (!correo) {
+    return res.status(400).json({ error: 'El correo electrónico es requerido' });
+  }
+
+  try {
+    // Verificar si el usuario existe en perfiles
+    const { data: perfil, error: perfilError } = await supabase
+      .from('perfiles')
+      .select('id, nombre')
+      .eq('correo', correo.trim().toLowerCase())
+      .maybeSingle();
+
+    if (perfilError || !perfil) {
+      // Por seguridad indicamos mensaje neutro o específico
+      return res.status(404).json({ error: 'No existe una cuenta registrada con este correo electrónico' });
+    }
+
+    // Generar código de 6 dígitos aleatorio
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiracion = new Date(Date.now() + 15 * 60 * 1000); // Válido por 15 minutos
+
+    // Eliminar códigos previos para el mismo correo
+    await supabase.from('codigos_recuperacion').delete().eq('correo', correo.trim().toLowerCase());
+
+    // Guardar nuevo código
+    const { error: insertError } = await supabase.from('codigos_recuperacion').insert({
+      correo: correo.trim().toLowerCase(),
+      codigo: codigo,
+      expiracion: expiracion.toISOString(),
+      usado: false,
+    });
+
+    if (insertError) {
+      console.error('Error insertando código:', insertError.message);
+      return res.status(400).json({ error: 'No se pudo procesar la solicitud de recuperación' });
+    }
+
+    // Intentar envío de correo via Supabase OTP/Email o simulación dev log
+    const { error: otpError } = await supabase.auth.signInWithOtp({
+      email: correo.trim().toLowerCase(),
+      options: {
+        shouldCreateUser: false,
+      },
+    });
+
+    if (otpError) {
+      console.log(`[DEV RECOVERY CODE] Código para ${correo}: ${codigo}`);
+    }
+
+    res.json({
+      mensaje: 'Código de recuperación enviado. Revisa tu correo electrónico.',
+      // En entorno local de desarrollo devolvemos el código en devMode para facilitar pruebas inmediatas
+      devCodigo: process.env.NODE_ENV !== 'production' ? codigo : undefined,
+    });
+
+  } catch (error) {
+    console.error('solicitarRecuperacion error:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+// 2. VERIFICAR CÓDIGO DE RECUPERACIÓN
+const verificarCodigoRecuperacion = async (req, res) => {
+  const { correo, codigo } = req.body;
+
+  if (!correo || !codigo) {
+    return res.status(400).json({ error: 'El correo y el código son requeridos' });
+  }
+
+  try {
+    const { data: reg, error } = await supabase
+      .from('codigos_recuperacion')
+      .select('*')
+      .eq('correo', correo.trim().toLowerCase())
+      .eq('codigo', codigo.trim())
+      .eq('usado', false)
+      .maybeSingle();
+
+    if (error || !reg) {
+      return res.status(400).json({ error: 'El código de verificación es incorrecto' });
+    }
+
+    if (new Date(reg.expiracion) < new Date()) {
+      return res.status(400).json({ error: 'El código ha expirado. Solicita uno nuevo.' });
+    }
+
+    res.json({ mensaje: 'Código verificado correctamente', valido: true });
+  } catch (error) {
+    console.error('verificarCodigoRecuperacion error:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+// 3. RESTABLECER CONTRASEÑA
+const restablecerPassword = async (req, res) => {
+  const { correo, codigo, nuevaPassword } = req.body;
+
+  if (!correo || !codigo || !nuevaPassword) {
+    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  }
+
+  if (nuevaPassword.length < 6) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  }
+
+  try {
+    // 1. Validar el código
+    const { data: reg, error: codeError } = await supabase
+      .from('codigos_recuperacion')
+      .select('*')
+      .eq('correo', correo.trim().toLowerCase())
+      .eq('codigo', codigo.trim())
+      .eq('usado', false)
+      .maybeSingle();
+
+    if (codeError || !reg) {
+      return res.status(400).json({ error: 'Código de verificación inválido o ya fue usado' });
+    }
+
+    if (new Date(reg.expiracion) < new Date()) {
+      return res.status(400).json({ error: 'El código ha expirado. Solicita uno nuevo.' });
+    }
+
+    // 2. Obtener el ID del usuario en perfiles
+    const { data: perfil, error: perfilError } = await supabase
+      .from('perfiles')
+      .select('id')
+      .eq('correo', correo.trim().toLowerCase())
+      .single();
+
+    if (perfilError || !perfil) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // 3. Actualizar contraseña usando Supabase Admin API
+    const { error: updateAuthError } = await supabase.auth.admin.updateUserById(
+      perfil.id,
+      { password: nuevaPassword }
+    );
+
+    if (updateAuthError) {
+      console.error('Error al actualizar password en auth:', updateAuthError.message);
+      return res.status(400).json({ error: 'No se pudo actualizar la contraseña: ' + updateAuthError.message });
+    }
+
+    // 4. Marcar el código como usado
+    await supabase
+      .from('codigos_recuperacion')
+      .update({ usado: true })
+      .eq('id', reg.id);
+
+    res.json({ mensaje: 'Contraseña restablecida con éxito. Ya puedes iniciar sesión.' });
+
+  } catch (error) {
+    console.error('restablecerPassword error:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+module.exports = {
+  registro,
+  login,
+  logout,
+  completarPerfilCuidadora,
+  crearAdmin,
+  subirDocumento,
+  completarPerfilFamilia,
+  solicitarRecuperacion,
+  verificarCodigoRecuperacion,
+  restablecerPassword,
+};
