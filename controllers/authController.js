@@ -98,6 +98,37 @@ const logout = async (req, res) => {
   }
 };
 
+// VERIFICAR SI UN CORREO YA ESTÁ REGISTRADO
+const verificarCorreo = async (req, res) => {
+  const { correo } = req.body;
+
+  if (!correo) {
+    return res.status(400).json({ error: 'El correo es requerido' });
+  }
+
+  try {
+    const { data: perfil, error } = await supabase
+      .from('perfiles')
+      .select('id')
+      .eq('correo', correo.trim().toLowerCase())
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error al verificar correo:', error.message);
+      return res.status(500).json({ error: 'Error al consultar la base de datos' });
+    }
+
+    if (perfil) {
+      return res.json({ existe: true, mensaje: 'El correo electrónico ya está registrado' });
+    }
+
+    res.json({ existe: false });
+  } catch (error) {
+    console.error('verificarCorreo error:', error.message);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
 // COMPLETAR PERFIL DE CUIDADORA
 const completarPerfilCuidadora = async (req, res) => {
   const { userId, datos } = req.body;
@@ -483,6 +514,7 @@ module.exports = {
   registro,
   login,
   logout,
+  verificarCorreo,
   completarPerfilCuidadora,
   crearAdmin,
   subirDocumento,

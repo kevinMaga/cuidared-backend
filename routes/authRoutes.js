@@ -4,6 +4,7 @@ const {
   registro,
   login,
   logout,
+  verificarCorreo,
   completarPerfilCuidadora,
   crearAdmin,
   completarPerfilFamilia,
@@ -15,6 +16,7 @@ const {
 router.post('/registro', registro);
 router.post('/login', login);
 router.post('/logout', logout);
+router.post('/verificar-correo', verificarCorreo);
 router.post('/completar-perfil-cuidadora', completarPerfilCuidadora);
 router.post('/crear-admin', crearAdmin);
 router.post('/completar-perfil-familia', completarPerfilFamilia);
