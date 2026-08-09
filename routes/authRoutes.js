@@ -9,7 +9,6 @@ const {
   crearAdmin,
   completarPerfilFamilia,
   solicitarRecuperacion,
-  verificarCodigoRecuperacion,
   restablecerPassword,
 } = require('../controllers/authController');
 
@@ -21,7 +20,6 @@ router.post('/completar-perfil-cuidadora', completarPerfilCuidadora);
 router.post('/crear-admin', crearAdmin);
 router.post('/completar-perfil-familia', completarPerfilFamilia);
 router.post('/solicitar-recuperacion', solicitarRecuperacion);
-router.post('/verificar-codigo', verificarCodigoRecuperacion);
 router.post('/restablecer-password', restablecerPassword);
 
 const multer = require('multer');

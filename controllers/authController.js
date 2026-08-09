@@ -1,5 +1,4 @@
 const { createClient } = require('@supabase/supabase-js');
-const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const supabase = createClient(
@@ -356,7 +355,7 @@ const completarPerfilFamilia = async (req, res) => {
   }
 };
 
-// 1. SOLICITAR CÓDIGO DE RECUPERACIÓN (OTP vía Supabase)
+// 1. SOLICITAR RECUPERACIÓN (envía magic link vía Supabase)
 const solicitarRecuperacion = async (req, res) => {
   const { correo } = req.body;
 
@@ -365,7 +364,6 @@ const solicitarRecuperacion = async (req, res) => {
   }
 
   try {
-    // Verificar si el usuario existe en perfiles
     const { data: perfil, error: perfilError } = await supabase
       .from('perfiles')
       .select('id, nombre')
@@ -376,22 +374,20 @@ const solicitarRecuperacion = async (req, res) => {
       return res.status(404).json({ error: 'No existe una cuenta registrada con este correo electrónico' });
     }
 
-    // Enviar OTP vía Supabase (el código aparecerá en el email template como {{ .Token }})
     const { error: otpError } = await supabase.auth.signInWithOtp({
       email: correo.trim().toLowerCase(),
       options: {
         shouldCreateUser: false,
+        emailRedirectTo: 'cuidaredfrontend://reset-password',
       },
     });
 
     if (otpError) {
       console.error('signInWithOtp error:', otpError.message);
-      return res.status(400).json({ error: 'No se pudo enviar el código de recuperación' });
+      return res.status(400).json({ error: 'No se pudo enviar el correo de recuperación' });
     }
 
-    res.json({
-      mensaje: 'Código de recuperación enviado. Revisa tu correo electrónico.',
-    });
+    res.json({ mensaje: 'Correo de recuperación enviado. Revisa tu bandeja de entrada.' });
 
   } catch (error) {
     console.error('solicitarRecuperacion error:', error.message);
@@ -399,45 +395,12 @@ const solicitarRecuperacion = async (req, res) => {
   }
 };
 
-// 2. VERIFICAR CÓDIGO DE RECUPERACIÓN (OTP de Supabase)
-const verificarCodigoRecuperacion = async (req, res) => {
-  const { correo, codigo } = req.body;
-
-  if (!correo || !codigo) {
-    return res.status(400).json({ error: 'El correo y el código son requeridos' });
-  }
-
-  try {
-    const { data, error } = await supabase.auth.verifyOtp({
-      email: correo.trim().toLowerCase(),
-      token: codigo.trim(),
-      type: 'email',
-    });
-
-    if (error || !data?.session) {
-      return res.status(400).json({ error: 'El código de verificación es incorrecto o ha expirado' });
-    }
-
-    // Firmar un resetToken JWT de un solo uso (10 min)
-    const resetToken = jwt.sign(
-      { email: correo.trim().toLowerCase(), purpose: 'password_reset' },
-      process.env.JWT_SECRET,
-      { expiresIn: '10m' }
-    );
-
-    res.json({ mensaje: 'Código verificado correctamente', valido: true, resetToken });
-  } catch (error) {
-    console.error('verificarCodigoRecuperacion error:', error.message);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-};
-
-// 3. RESTABLECER CONTRASEÑA (requiere resetToken del paso anterior)
+// 2. RESTABLECER CONTRASEÑA (requiere accessToken del magic link)
 const restablecerPassword = async (req, res) => {
-  const { correo, resetToken, nuevaPassword } = req.body;
+  const { accessToken, nuevaPassword } = req.body;
 
-  if (!correo || !resetToken || !nuevaPassword) {
-    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  if (!accessToken || !nuevaPassword) {
+    return res.status(400).json({ error: 'El token y la nueva contraseña son requeridos' });
   }
 
   if (nuevaPassword.length < 6) {
@@ -445,38 +408,20 @@ const restablecerPassword = async (req, res) => {
   }
 
   try {
-    // 1. Validar el resetToken JWT
-    let payload;
-    try {
-      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
-    } catch (err) {
-      return res.status(400).json({ error: 'El token de restablecimiento es inválido o expiró. Solicita uno nuevo.' });
+    const { data: { user }, error: getUserError } = await supabase.auth.getUser(accessToken);
+
+    if (getUserError || !user) {
+      return res.status(400).json({ error: 'El enlace de recuperación es inválido o ha expirado. Solicita uno nuevo.' });
     }
 
-    if (payload.purpose !== 'password_reset' || payload.email !== correo.trim().toLowerCase()) {
-      return res.status(400).json({ error: 'El token de restablecimiento no es válido' });
-    }
-
-    // 2. Obtener el ID del usuario en perfiles
-    const { data: perfil, error: perfilError } = await supabase
-      .from('perfiles')
-      .select('id')
-      .eq('correo', correo.trim().toLowerCase())
-      .single();
-
-    if (perfilError || !perfil) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    // 3. Actualizar contraseña usando Supabase Admin API
-    const { error: updateAuthError } = await supabase.auth.admin.updateUserById(
-      perfil.id,
+    const { error: updateError } = await supabase.auth.admin.updateUserById(
+      user.id,
       { password: nuevaPassword }
     );
 
-    if (updateAuthError) {
-      console.error('Error al actualizar password en auth:', updateAuthError.message);
-      return res.status(400).json({ error: 'No se pudo actualizar la contraseña: ' + updateAuthError.message });
+    if (updateError) {
+      console.error('Error al actualizar password:', updateError.message);
+      return res.status(400).json({ error: 'No se pudo actualizar la contraseña' });
     }
 
     res.json({ mensaje: 'Contraseña restablecida con éxito. Ya puedes iniciar sesión.' });
@@ -497,6 +442,5 @@ module.exports = {
   subirDocumento,
   completarPerfilFamilia,
   solicitarRecuperacion,
-  verificarCodigoRecuperacion,
   restablecerPassword,
 };
