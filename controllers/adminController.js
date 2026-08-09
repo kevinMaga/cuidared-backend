@@ -48,36 +48,63 @@ const getDashboardMetrics = async (req, res) => {
       .select('*', { count: 'exact', head: true })
       .eq('archivado', false);
 
-    // --- VALIDACIONES ---
-    // Reutilizamos la misma lógica de estado que en listarValidaciones
-    const { data: cuidadoras } = await supabase
+    // --- PROGRESO DE CURSOS (RF-82) ---
+    // Contamos asignaciones curso×cuidadora:
+    //   enProgreso  = 0 < % < 100
+    //   completados = % = 100
+    const { data: asignaciones } = await supabase
+      .from('cursos_asignados')
+      .select('curso_id, cuidadora_id');
+
+    const { data: modulosActivos } = await supabase
+      .from('modulos')
+      .select('id, curso_id')
+      .eq('archivado', false);
+
+    const { data: progresoGlobal } = await supabase
+      .from('progreso_modulos')
+      .select('cuidadora_id, curso_id, modulo_id');
+
+    const totalModulosPorCurso = {};
+    (modulosActivos || []).forEach((m) => {
+      totalModulosPorCurso[m.curso_id] = (totalModulosPorCurso[m.curso_id] || 0) + 1;
+    });
+
+    let cursosEnProgreso = 0;
+    let cursosCompletados = 0;
+    (asignaciones || []).forEach((a) => {
+      const total = totalModulosPorCurso[a.curso_id] || 0;
+      if (total === 0) return;
+      const completados = (progresoGlobal || []).filter(
+        (p) => p.cuidadora_id === a.cuidadora_id && p.curso_id === a.curso_id
+      ).length;
+      if (completados >= total) cursosCompletados++;
+      else if (completados > 0) cursosEnProgreso++;
+    });
+
+    // --- VALIDACIONES (RF-22 / RF-69) ---
+    const { data: validacionCuidadoras } = await supabase
       .from('cuidadoras')
-      .select(`
-        id, url_cedula, url_certificado_migratorio, url_record_policial,
-        url_copia_titulo, url_certificados, url_cv
-      `);
+      .select('estado_validacion');
 
     const { data: revisiones } = await supabase
       .from('revisiones_documentos')
-      .select('*');
+      .select('cuidadora_id, tipo, estado');
 
-    let valPendientes = 0;
     let valAprobadas = 0;
+    let valPendientes = 0;
+    let valRechazadas = 0;
     let valCambios = 0;
 
-    (cuidadoras || []).forEach((c) => {
-      const docs = TIPOS_DOC.map((tipo) => {
-        const rev = (revisiones || []).find(
-          (r) => r.cuidadora_id === c.id && r.tipo === tipo
-        );
-        return {
-          url: c[COL_DOC[tipo]] || null,
-          estado: rev?.estado || 'pendiente',
-        };
-      });
-      const estado = estadoGeneral(docs);
-      if (estado === 'approved') valAprobadas++;
-      else if (estado === 'changes_requested') valCambios++;
+    (validacionCuidadoras || []).forEach((c) => {
+      const conCambios = TIPOS_DOC.some((tipo) =>
+        (revisiones || []).some(
+          (r) => r.cuidadora_id === c.id && r.tipo === tipo && r.estado === 'cambios_solicitados'
+        )
+      );
+      if (c.estado_validacion === 'aprobado') valAprobadas++;
+      else if (c.estado_validacion === 'rechazado') valRechazadas++;
+      else if (conCambios) valCambios++;
       else valPendientes++;
     });
 
@@ -90,14 +117,15 @@ const getDashboardMetrics = async (req, res) => {
       cursos: {
         total: cursosCount || 0,
         modulos: modulosCount || 0,
-        enProgreso: 0,   // pendiente: requiere tabla de progreso
-        completados: 0,  // pendiente: requiere tabla de progreso
+        enProgreso: cursosEnProgreso,
+        completados: cursosCompletados,
       },
 
       validaciones: {
         pendientes: valPendientes,
         aprobadas: valAprobadas,
         cambiosSolicitados: valCambios,
+        rechazadas: valRechazadas,
       },
     });
   } catch (error) {
@@ -320,6 +348,153 @@ exports.subirVideo = async (req, res) => {
   }
 };
 
+// ---------- ASIGNACIÓN DE CURSOS (RF-81 / RF-82) ----------
+
+// GET /api/admin/cuidadoras  -> catálogo para asignar cursos
+exports.listarCuidadorasActivas = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('cuidadoras')
+      .select(`
+        id, especialidades, años_experiencia, estado_validacion,
+        perfiles!inner ( nombre, avatar_url, ciudad )
+      `);
+    if (error) throw error;
+
+    const resultado = (data || []).map((c) => ({
+      id: c.id,
+      nombre: c.perfiles?.nombre || 'Sin nombre',
+      avatarUrl: c.perfiles?.avatar_url || null,
+      ciudad: c.perfiles?.ciudad || null,
+      especialidades: c.especialidades || [],
+      años_experiencia: c.años_experiencia || 0,
+      estado_validacion: c.estado_validacion || 'pendiente',
+    }));
+    resultado.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    res.json(resultado);
+  } catch (err) {
+    console.error('listarCuidadorasActivas:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las cuidadoras' });
+  }
+};
+
+// POST /api/admin/cursos/:cursoId/asignar  body: { cuidadoraIds?: string[], todas?: boolean }
+exports.asignarCurso = async (req, res) => {
+  try {
+    const { cursoId } = req.params;
+    const { cuidadoraIds, todas } = req.body;
+
+    const { data: curso } = await supabase
+      .from('cursos').select('id').eq('id', cursoId).maybeSingle();
+    if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
+
+    let ids = Array.isArray(cuidadoraIds) ? cuidadoraIds : [];
+    if (todas) {
+      const { data: todasCuidadoras } = await supabase
+        .from('cuidadoras')
+        .select('id, perfiles!inner(id)');
+      ids = (todasCuidadoras || []).map((c) => c.id);
+    }
+    ids = [...new Set(ids.filter(Boolean))];
+    if (ids.length === 0) return res.status(400).json({ error: 'Selecciona al menos una cuidadora' });
+
+    const { data: existentes } = await supabase
+      .from('cursos_asignados')
+      .select('cuidadora_id')
+      .eq('curso_id', cursoId)
+      .in('cuidadora_id', ids);
+
+    const yaAsignadas = new Set((existentes || []).map((e) => e.cuidadora_id));
+    const nuevas = ids.filter((cid) => !yaAsignadas.has(cid));
+
+    if (nuevas.length > 0) {
+      const filas = nuevas.map((cid) => ({ curso_id: cursoId, cuidadora_id: cid }));
+      const { error } = await supabase.from('cursos_asignados').insert(filas);
+      if (error) throw error;
+    }
+
+    res.json({ asignadas: ids.length, nuevas: nuevas.length, yaAsignadas: yaAsignadas.size });
+  } catch (err) {
+    console.error('asignarCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo asignar el curso' });
+  }
+};
+
+// DELETE /api/admin/cursos/:cursoId/asignar/:cuidadoraId
+exports.desasignarCurso = async (req, res) => {
+  try {
+    const { cursoId, cuidadoraId } = req.params;
+    const { error } = await supabase
+      .from('cursos_asignados')
+      .delete()
+      .eq('curso_id', cursoId)
+      .eq('cuidadora_id', cuidadoraId);
+    if (error) throw error;
+    res.json({ mensaje: 'Asignación eliminada' });
+  } catch (err) {
+    console.error('desasignarCurso:', err.message);
+    res.status(500).json({ error: 'No se pudo quitar la asignación' });
+  }
+};
+
+// GET /api/admin/cursos/:cursoId/asignaciones
+// Devuelve por cuidadora asignada: nombre, avatar y progreso en el curso (RF-82).
+exports.obtenerAsignacionesCurso = async (req, res) => {
+  try {
+    const { cursoId } = req.params;
+
+    const { data: asignaciones, error: e1 } = await supabase
+      .from('cursos_asignados')
+      .select('cuidadora_id')
+      .eq('curso_id', cursoId);
+    if (e1) throw e1;
+
+    const cuidadoraIds = (asignaciones || []).map((a) => a.cuidadora_id);
+    if (cuidadoraIds.length === 0) return res.json([]);
+
+    const { data: cuidadoras, error: e2 } = await supabase
+      .from('cuidadoras')
+      .select(`id, perfiles!inner ( nombre, avatar_url )`)
+      .in('id', cuidadoraIds);
+    if (e2) throw e2;
+
+    const { data: modulos, error: e3 } = await supabase
+      .from('modulos')
+      .select('id')
+      .eq('curso_id', cursoId)
+      .eq('archivado', false);
+    if (e3) throw e3;
+    const total = (modulos || []).length;
+
+    const { data: progreso, error: e4 } = await supabase
+      .from('progreso_modulos')
+      .select('cuidadora_id, modulo_id')
+      .eq('curso_id', cursoId)
+      .in('cuidadora_id', cuidadoraIds);
+    if (e4) throw e4;
+
+    const resultado = cuidadoraIds.map((cid) => {
+      const c = cuidadoras.find((x) => x.id === cid);
+      const filasProgreso = (progreso || []).filter((p) => p.cuidadora_id === cid);
+      return {
+        cuidadoraId: cid,
+        nombre: c?.perfiles?.nombre || 'Sin nombre',
+        avatarUrl: c?.perfiles?.avatar_url || null,
+        completados: filasProgreso.length,
+        completadosIds: filasProgreso.map((p) => p.modulo_id),
+        total,
+        porcentaje: total > 0 ? Math.round((filasProgreso.length / total) * 100) : 0,
+      };
+    });
+
+    resultado.sort((a, b) => a.nombre.localeCompare(b.nombre));
+    res.json(resultado);
+  } catch (err) {
+    console.error('obtenerAsignacionesCurso:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener las asignaciones' });
+  }
+};
+
 // Calcula el estado general a partir de los 6 documentos
 function estadoGeneral(docs) {
   const subidos = docs.filter((d) => d.url);
@@ -339,6 +514,7 @@ exports.listarValidaciones = async (req, res) => {
       .select(`
         id, url_cedula, url_certificado_migratorio, url_record_policial,
         url_copia_titulo, url_certificados, url_cv,
+        estado_validacion, motivo_rechazo,
         perfiles!inner ( nombre, avatar_url )
       `);
     if (e1) throw e1;
@@ -366,6 +542,8 @@ exports.listarValidaciones = async (req, res) => {
         caregiverName: c.perfiles?.nombre || 'Sin nombre',
         caregiverAvatarUrl: c.perfiles?.avatar_url || null,
         status: estadoGeneral(docs),
+        estadoValidacion: c.estado_validacion || 'pendiente',
+        motivoRechazo: c.motivo_rechazo || null,
         uploadedDocs: subidos,
         totalDocs: TIPOS_DOC.length,
         docs,
@@ -426,13 +604,106 @@ exports.revisarDocumento = async (req, res) => {
   }
 };
 
+// PATCH /api/admin/validaciones/:cuidadoraId/aprobar
+// Aprueba el PERFIL COMPLETO (RF-69). Requiere los 6 documentos subidos y aprobados.
+exports.aprobarPerfil = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: cuidadora, error: e1 } = await supabase
+      .from('cuidadoras')
+      .select('url_cedula, url_certificado_migratorio, url_record_policial, url_copia_titulo, url_certificados, url_cv')
+      .eq('id', cuidadoraId)
+      .single();
+    if (e1) throw e1;
+
+    const { data: revisiones, error: e2 } = await supabase
+      .from('revisiones_documentos')
+      .select('*')
+      .eq('cuidadora_id', cuidadoraId);
+    if (e2) throw e2;
+
+    const docs = TIPOS_DOC.map((tipo) => {
+      const rev = (revisiones || []).find((r) => r.tipo === tipo);
+      return {
+        url: cuidadora[COL_DOC[tipo]] || null,
+        estado: rev?.estado || 'pendiente',
+      };
+    });
+    if (estadoGeneral(docs) !== 'approved') {
+      return res.status(400).json({
+        error: 'Todos los documentos deben estar subidos y aprobados para aprobar el perfil',
+      });
+    }
+
+    const { data, error: e3 } = await supabase
+      .from('cuidadoras')
+      .update({
+        estado_validacion: 'aprobado',
+        motivo_rechazo: null,
+        fecha_validacion: new Date().toISOString(),
+      })
+      .eq('id', cuidadoraId)
+      .select('estado_validacion, motivo_rechazo, fecha_validacion')
+      .single();
+    if (e3) throw e3;
+
+    await supabase.from('notificaciones').insert({
+      usuario_id: cuidadoraId,
+      tipo: 'validacion',
+      titulo: 'Perfil verificado',
+      mensaje: 'Tu perfil fue aprobado. Ahora eres una cuidadora verificada de Cuida Red.',
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('aprobarPerfil:', err.message);
+    res.status(500).json({ error: 'No se pudo aprobar el perfil' });
+  }
+};
+
+// PATCH /api/admin/validaciones/:cuidadoraId/rechazar  body: { motivo }
+exports.rechazarPerfil = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+    const { motivo } = req.body;
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ error: 'El motivo de rechazo es obligatorio' });
+    }
+
+    const { data, error } = await supabase
+      .from('cuidadoras')
+      .update({
+        estado_validacion: 'rechazado',
+        motivo_rechazo: String(motivo).trim(),
+        fecha_validacion: new Date().toISOString(),
+      })
+      .eq('id', cuidadoraId)
+      .select('estado_validacion, motivo_rechazo, fecha_validacion')
+      .single();
+    if (error) throw error;
+
+    await supabase.from('notificaciones').insert({
+      usuario_id: cuidadoraId,
+      tipo: 'validacion',
+      titulo: 'Perfil rechazado',
+      mensaje: `Tu perfil no fue aprobado. Motivo: ${String(motivo).trim()}`,
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('rechazarPerfil:', err.message);
+    res.status(500).json({ error: 'No se pudo rechazar el perfil' });
+  }
+};
+
 // GET /api/admin/solicitudes
 exports.obtenerSolicitudes = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('solicitudes_conexion')
       .select(`
-        id, estado, familia_confirmo, cuidadora_confirmo, creado_en,
+        id, estado, familia_confirmo, cuidadora_confirmo, creado_en, motivo_rechazo_admin,
         familiares!familiar_id ( id, nombre, parentesco, edad, tipos_cuidado, condiciones_especificas ),
         empleadoras!empleadora_id ( id, perfiles!inner ( nombre, ciudad ) ),
         cuidadoras!cuidadora_id ( id, especialidades, calificacion_promedio, perfiles!inner ( nombre, avatar_url ) )
@@ -501,6 +772,41 @@ exports.tomarSolicitud = async (req, res) => {
   } catch (err) {
     console.error('tomarSolicitud:', err.message);
     res.status(500).json({ error: 'No se pudo tomar la solicitud' });
+  }
+};
+
+// PATCH /api/admin/solicitudes/:id/rechazar  body: { motivo }
+// El admin rechaza una solicitud de conexión (RF-73). Solo desde nueva o en_gestion.
+exports.rechazarSolicitud = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ error: 'El motivo de rechazo es obligatorio' });
+    }
+
+    const { data: solicitud, error } = await supabase
+      .from('solicitudes_conexion')
+      .update({ estado: 'rechazada_admin', motivo_rechazo_admin: String(motivo).trim() })
+      .eq('id', id)
+      .in('estado', ['nueva', 'en_gestion'])
+      .select('empleadora_id, cuidadora_id')
+      .maybeSingle();
+    if (error) throw error;
+    if (!solicitud) return res.status(409).json({ error: 'La solicitud ya no se puede rechazar' });
+
+    await supabase.from('notificaciones').insert({
+      usuario_id: solicitud.empleadora_id,
+      tipo: 'solicitud',
+      titulo: 'Solicitud rechazada',
+      mensaje: `Tu solicitud de conexión fue rechazada por Cuida Red. Motivo: ${String(motivo).trim()}`,
+      solicitud_id: id,
+    });
+
+    res.json(solicitud);
+  } catch (err) {
+    console.error('rechazarSolicitud:', err.message);
+    res.status(500).json({ error: 'No se pudo rechazar la solicitud' });
   }
 };
 

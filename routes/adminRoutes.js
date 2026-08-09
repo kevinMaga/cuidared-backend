@@ -6,6 +6,8 @@ const {
   obtenerSolicitudes, tomarSolicitud, crearServicio, archivarModulo, 
   subirVideo, getDashboardMetrics, listarValidaciones, revisarDocumento,
   completarServicio, actualizarServicio,
+  aprobarPerfil, rechazarPerfil, rechazarSolicitud,
+  listarCuidadorasActivas, asignarCurso, desasignarCurso, obtenerAsignacionesCurso,
 } = require('../controllers/adminController');
 const multer = require('multer');
 const { subirDocumento } = require('../controllers/authController');
@@ -17,12 +19,18 @@ const upload = multer({
 
 
 router.get('/dashboard-metrics', getDashboardMetrics);
+router.get('/cuidadoras', listarCuidadorasActivas);
 // Cursos
 router.get('/cursos', listarCursos);
 router.get('/cursos/:id', obtenerCurso);
 router.post('/cursos', crearCurso);
 router.put('/cursos/:id', editarCurso);
 router.patch('/cursos/:id/archivar', archivarCurso);
+
+// Asignación de cursos
+router.post('/cursos/:cursoId/asignar', asignarCurso);
+router.delete('/cursos/:cursoId/asignar/:cuidadoraId', desasignarCurso);
+router.get('/cursos/:cursoId/asignaciones', obtenerAsignacionesCurso);
 
 // Módulos
 router.post('/cursos/:cursoId/modulos', crearModulo);
@@ -32,8 +40,11 @@ router.post('/upload-video', upload.single('video'), subirVideo);
 
 router.get('/validaciones', listarValidaciones);
 router.patch('/validaciones/:cuidadoraId/documento', revisarDocumento);
+router.patch('/validaciones/:cuidadoraId/aprobar', aprobarPerfil);
+router.patch('/validaciones/:cuidadoraId/rechazar', rechazarPerfil);
 router.get('/solicitudes', obtenerSolicitudes);
 router.put('/solicitudes/:id/tomar', tomarSolicitud);
+router.patch('/solicitudes/:id/rechazar', rechazarSolicitud);
 router.post('/solicitudes/:solicitudId/crear-servicio', crearServicio);
 
 router.get('/solicitudes/:solicitudId/conversacion/:tipo/mensajes', obtenerMensajesAdmin);

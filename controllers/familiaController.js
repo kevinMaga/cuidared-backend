@@ -72,6 +72,7 @@ exports.agregarFamiliar = async (req, res) => {
         condiciones_especificas: req.body.condiciones_especificas || null,
         dias_disponibles: req.body.dias_disponibles || null,
         alcance_servicio: req.body.alcance_servicio || null,
+        tareas_domesticas: req.body.tareas_domesticas || [],
       })
       .select().single();
     if (error) throw error;
@@ -96,6 +97,7 @@ exports.editarFamiliar = async (req, res) => {
     if (req.body.condiciones_especificas !== undefined) cambios.condiciones_especificas = req.body.condiciones_especificas;
     if (req.body.dias_disponibles !== undefined) cambios.dias_disponibles = req.body.dias_disponibles;
     if (req.body.alcance_servicio !== undefined) cambios.alcance_servicio = req.body.alcance_servicio;
+    if (req.body.tareas_domesticas !== undefined) cambios.tareas_domesticas = req.body.tareas_domesticas;
 
     const { data, error } = await supabase
       .from('familiares').update(cambios).eq('id', familiarId).select().single();
@@ -168,14 +170,16 @@ exports.actualizarPerfilFamilia = async (req, res) => {
 // GET /api/familia/cuidadoras  -> lista de cuidadoras disponibles para buscar
 exports.buscarCuidadoras = async (req, res) => {
   try {
-    // Traemos cuidadoras con su nombre (de perfiles)
+    // Solo cuidadoras con perfil VERIFICADO aparecen en la red (RF-22 / RF-69)
     const { data: cuidadoras, error } = await supabase
       .from('cuidadoras')
       .select(`
         id, especialidades, modalidad, zonas_cobertura, provincia,
         años_experiencia, calificacion_promedio, nivel_formacion,
+        estado_validacion,
         perfiles!inner ( nombre, ciudad, provincia )
-      `);
+      `)
+      .eq('estado_validacion', 'aprobado');
     if (error) throw error;
 
     const resultado = (cuidadoras || []).map((c) => ({
@@ -188,6 +192,7 @@ exports.buscarCuidadoras = async (req, res) => {
       experiencia: c.años_experiencia || 0,
       calificacion: c.calificacion_promedio || null,
       formacion: c.nivel_formacion || '',
+      verificado: c.estado_validacion === 'aprobado',
     }));
 
     res.json(resultado);

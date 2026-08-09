@@ -80,6 +80,62 @@ exports.obtenerProgreso = async (req, res) => {
   }
 };
 
+// GET /api/cuidador/:cuidadoraId/cursos
+// Devuelve SOLO los cursos asignados a la cuidadora (RF-81) con su progreso.
+exports.obtenerCursosAsignados = async (req, res) => {
+  try {
+    const { cuidadoraId } = req.params;
+
+    const { data: asignaciones, error: e1 } = await supabase
+      .from('cursos_asignados')
+      .select('curso_id')
+      .eq('cuidadora_id', cuidadoraId);
+    if (e1) throw e1;
+
+    const cursoIds = (asignaciones || []).map((a) => a.curso_id);
+    if (cursoIds.length === 0) return res.json([]);
+
+    const { data: cursos, error: e2 } = await supabase
+      .from('cursos')
+      .select('*, modulos!inner(id, archivado)')
+      .in('id', cursoIds)
+      .eq('archivado', false)
+      .order('created_at', { ascending: true });
+    if (e2) throw e2;
+
+    const { data: progreso, error: e3 } = await supabase
+      .from('progreso_modulos')
+      .select('curso_id, modulo_id')
+      .eq('cuidadora_id', cuidadoraId)
+      .in('curso_id', cursoIds);
+    if (e3) throw e3;
+
+    const resultado = (cursos || []).map((c) => {
+      const modulosActivos = (c.modulos || []).filter((m) => !m.archivado);
+      const total = modulosActivos.length;
+      const completados = (progreso || [])
+        .filter((p) => p.curso_id === c.id)
+        .filter((p) => modulosActivos.some((m) => m.id === p.modulo_id)).length;
+      return {
+        ...c,
+        modulos: modulosActivos,
+        total_modulos: total,
+        progreso: {
+          completados,
+          completadosIds: (progreso || []).filter((p) => p.curso_id === c.id).map((p) => p.modulo_id),
+          total,
+          porcentaje: total > 0 ? Math.round((completados / total) * 100) : 0,
+        },
+      };
+    });
+
+    res.json(resultado);
+  } catch (err) {
+    console.error('obtenerCursosAsignados:', err.message);
+    res.status(500).json({ error: 'No se pudieron obtener los cursos asignados' });
+  }
+};
+
 // GET /api/cuidador/:cuidadoraId/perfil
 exports.obtenerPerfilCuidadora = async (req, res) => {
   try {

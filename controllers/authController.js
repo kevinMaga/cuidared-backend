@@ -233,6 +233,13 @@ const subirDocumento = async (req, res) => {
         { onConflict: 'cuidadora_id,tipo' }
       );
 
+    // El perfil vuelve a "Pendiente de validación" mientras el admin
+    // revisa los documentos actualizados (RF-22).
+    await supabase
+      .from('cuidadoras')
+      .update({ estado_validacion: 'pendiente', motivo_rechazo: null })
+      .eq('id', cuidadoraId);
+
     res.status(201).json({ url: pub.publicUrl, nombre: req.file.originalname });
   } catch (err) {
     console.error('subirDocumento:', err.message);
@@ -335,6 +342,7 @@ const completarPerfilFamilia = async (req, res) => {
         condiciones_especificas: m.conditions || null,
         dias_disponibles: m.schedule || [],
         alcance_servicio: m.taskScope || 'solo_cuidado',
+        tareas_domesticas: m.tasks || [],
       }));
       const { error: famError } = await supabase.from('familiares').insert(filas);
       if (famError) return res.status(400).json({ error: famError.message });

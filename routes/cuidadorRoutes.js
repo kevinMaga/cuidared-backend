@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   marcarModuloCompletado,
   obtenerProgreso,
+  obtenerCursosAsignados,
   obtenerPerfilCuidadora,
   actualizarPerfilCuidadora,
   obtenerOportunidades,
@@ -20,6 +21,7 @@ const {
 
 router.post('/progreso', marcarModuloCompletado);
 router.get('/:cuidadoraId/progreso', obtenerProgreso);
+router.get('/:cuidadoraId/cursos', obtenerCursosAsignados);
 router.get('/:cuidadoraId/perfil', obtenerPerfilCuidadora);
 router.put('/:cuidadoraId/perfil', actualizarPerfilCuidadora);
 router.get('/:cuidadoraId/oportunidades', obtenerOportunidades);
