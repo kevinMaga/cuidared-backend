@@ -184,7 +184,7 @@ exports.buscarCuidadoras = async (req, res) => {
 
     const resultado = (cuidadoras || []).map((c) => ({
       id: c.id,
-      nombre: c.perfiles?.nombre || 'Cuidadora',
+      nombre: (c.perfiles?.nombre || 'Cuidadora').trim(),
       ciudad: c.perfiles?.ciudad || '',
       especialidades: c.especialidades || [],
       modalidad: c.modalidad || [],
@@ -446,7 +446,7 @@ exports.obtenerConversacionesFamilia = async (req, res) => {
         solicitudId: solicitud.id,
         estado: solicitud.estado,
         familiarNombre: solicitud.familiares?.nombre || '',
-        cuidadoraNombre: solicitud.cuidadoras?.perfiles?.nombre || 'Cuidador',
+        cuidadoraNombre: (solicitud.cuidadoras?.perfiles?.nombre || 'Cuidador').trim(),
         ultimoMensaje: ultimoMensaje?.texto || '',
         ultimoMensajeFecha: ultimoMensaje?.creado_en || null,
       };

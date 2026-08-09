@@ -437,7 +437,7 @@ exports.obtenerConversacionesCuidador = async (req, res) => {
         solicitudId: solicitud.id,
         estado: solicitud.estado,
         familiarNombre: solicitud.familiares?.nombre || '',
-        familiaNombre: solicitud.empleadoras?.perfiles?.nombre || 'Familia',
+        familiaNombre: (solicitud.empleadoras?.perfiles?.nombre || 'Familia').trim(),
         ultimoMensaje: ultimoMensaje?.texto || '',
         ultimoMensajeFecha: ultimoMensaje?.creado_en || null,
       };

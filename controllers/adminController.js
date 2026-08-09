@@ -7,6 +7,7 @@ const supabase = createClient(
 );
 
 const TIPOS_DOC = ['cedula', 'migratorio', 'record_policial', 'titulo', 'certificaciones', 'cv'];
+const DOCS_OBLIGATORIOS = ['cedula', 'record_policial'];
 const COL_DOC = {
   cedula: 'url_cedula',
   migratorio: 'url_certificado_migratorio',
@@ -363,7 +364,7 @@ exports.listarCuidadorasActivas = async (req, res) => {
 
     const resultado = (data || []).map((c) => ({
       id: c.id,
-      nombre: c.perfiles?.nombre || 'Sin nombre',
+      nombre: (c.perfiles?.nombre || 'Sin nombre').trim(),
       avatarUrl: c.perfiles?.avatar_url || null,
       ciudad: c.perfiles?.ciudad || null,
       especialidades: c.especialidades || [],
@@ -478,7 +479,7 @@ exports.obtenerAsignacionesCurso = async (req, res) => {
       const filasProgreso = (progreso || []).filter((p) => p.cuidadora_id === cid);
       return {
         cuidadoraId: cid,
-        nombre: c?.perfiles?.nombre || 'Sin nombre',
+        nombre: (c?.perfiles?.nombre || 'Sin nombre').trim(),
         avatarUrl: c?.perfiles?.avatar_url || null,
         completados: filasProgreso.length,
         completadosIds: filasProgreso.map((p) => p.modulo_id),
@@ -495,11 +496,12 @@ exports.obtenerAsignacionesCurso = async (req, res) => {
   }
 };
 
-// Calcula el estado general a partir de los 6 documentos
+// Calcula el estado general a partir de los documentos obligatorios
 function estadoGeneral(docs) {
-  const subidos = docs.filter((d) => d.url);
-  if (subidos.some((d) => d.estado === 'cambios_solicitados')) return 'changes_requested';
-  if (subidos.length === TIPOS_DOC.length && subidos.every((d) => d.estado === 'aprobado')) {
+  const obligatorios = docs.filter((d) => DOCS_OBLIGATORIOS.includes(d.tipo));
+  const subidos = obligatorios.filter((d) => d.url);
+  if (obligatorios.some((d) => d.estado === 'cambios_solicitados')) return 'changes_requested';
+  if (subidos.length === DOCS_OBLIGATORIOS.length && subidos.every((d) => d.estado === 'aprobado')) {
     return 'approved';
   }
   return 'pending';
@@ -534,18 +536,18 @@ exports.listarValidaciones = async (req, res) => {
           nota: rev?.nota || null,
         };
       });
-      const subidos = docs.filter((d) => d.url).length;
+      const subidosObligatorios = docs.filter((d) => DOCS_OBLIGATORIOS.includes(d.tipo) && d.url).length;
 
       return {
         id: c.id,
         caregiverId: c.id,
-        caregiverName: c.perfiles?.nombre || 'Sin nombre',
+        caregiverName: (c.perfiles?.nombre || 'Sin nombre').trim(),
         caregiverAvatarUrl: c.perfiles?.avatar_url || null,
         status: estadoGeneral(docs),
         estadoValidacion: c.estado_validacion || 'pendiente',
         motivoRechazo: c.motivo_rechazo || null,
-        uploadedDocs: subidos,
-        totalDocs: TIPOS_DOC.length,
+        uploadedDocs: subidosObligatorios,
+        totalDocs: DOCS_OBLIGATORIOS.length,
         docs,
       };
     });
@@ -626,13 +628,14 @@ exports.aprobarPerfil = async (req, res) => {
     const docs = TIPOS_DOC.map((tipo) => {
       const rev = (revisiones || []).find((r) => r.tipo === tipo);
       return {
+        tipo,
         url: cuidadora[COL_DOC[tipo]] || null,
         estado: rev?.estado || 'pendiente',
       };
     });
     if (estadoGeneral(docs) !== 'approved') {
       return res.status(400).json({
-        error: 'Todos los documentos deben estar subidos y aprobados para aprobar el perfil',
+        error: 'Los documentos obligatorios (cédula y record policial) deben estar subidos y aprobados para aprobar el perfil',
       });
     }
 

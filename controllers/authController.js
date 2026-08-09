@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const supabase = createClient(
@@ -355,7 +356,7 @@ const completarPerfilFamilia = async (req, res) => {
   }
 };
 
-// 1. SOLICITAR CÓDIGO DE RECUPERACIÓN (6 DÍGITOS)
+// 1. SOLICITAR CÓDIGO DE RECUPERACIÓN (OTP vía Supabase)
 const solicitarRecuperacion = async (req, res) => {
   const { correo } = req.body;
 
@@ -372,31 +373,10 @@ const solicitarRecuperacion = async (req, res) => {
       .maybeSingle();
 
     if (perfilError || !perfil) {
-      // Por seguridad indicamos mensaje neutro o específico
       return res.status(404).json({ error: 'No existe una cuenta registrada con este correo electrónico' });
     }
 
-    // Generar código de 6 dígitos aleatorio
-    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiracion = new Date(Date.now() + 15 * 60 * 1000); // Válido por 15 minutos
-
-    // Eliminar códigos previos para el mismo correo
-    await supabase.from('codigos_recuperacion').delete().eq('correo', correo.trim().toLowerCase());
-
-    // Guardar nuevo código
-    const { error: insertError } = await supabase.from('codigos_recuperacion').insert({
-      correo: correo.trim().toLowerCase(),
-      codigo: codigo,
-      expiracion: expiracion.toISOString(),
-      usado: false,
-    });
-
-    if (insertError) {
-      console.error('Error insertando código:', insertError.message);
-      return res.status(400).json({ error: 'No se pudo procesar la solicitud de recuperación' });
-    }
-
-    // Intentar envío de correo via Supabase OTP/Email o simulación dev log
+    // Enviar OTP vía Supabase (el código aparecerá en el email template como {{ .Token }})
     const { error: otpError } = await supabase.auth.signInWithOtp({
       email: correo.trim().toLowerCase(),
       options: {
@@ -405,13 +385,12 @@ const solicitarRecuperacion = async (req, res) => {
     });
 
     if (otpError) {
-      console.log(`[DEV RECOVERY CODE] Código para ${correo}: ${codigo}`);
+      console.error('signInWithOtp error:', otpError.message);
+      return res.status(400).json({ error: 'No se pudo enviar el código de recuperación' });
     }
 
     res.json({
       mensaje: 'Código de recuperación enviado. Revisa tu correo electrónico.',
-      // En entorno local de desarrollo devolvemos el código en devMode para facilitar pruebas inmediatas
-      devCodigo: process.env.NODE_ENV !== 'production' ? codigo : undefined,
     });
 
   } catch (error) {
@@ -420,7 +399,7 @@ const solicitarRecuperacion = async (req, res) => {
   }
 };
 
-// 2. VERIFICAR CÓDIGO DE RECUPERACIÓN
+// 2. VERIFICAR CÓDIGO DE RECUPERACIÓN (OTP de Supabase)
 const verificarCodigoRecuperacion = async (req, res) => {
   const { correo, codigo } = req.body;
 
@@ -429,34 +408,35 @@ const verificarCodigoRecuperacion = async (req, res) => {
   }
 
   try {
-    const { data: reg, error } = await supabase
-      .from('codigos_recuperacion')
-      .select('*')
-      .eq('correo', correo.trim().toLowerCase())
-      .eq('codigo', codigo.trim())
-      .eq('usado', false)
-      .maybeSingle();
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: correo.trim().toLowerCase(),
+      token: codigo.trim(),
+      type: 'email',
+    });
 
-    if (error || !reg) {
-      return res.status(400).json({ error: 'El código de verificación es incorrecto' });
+    if (error || !data?.session) {
+      return res.status(400).json({ error: 'El código de verificación es incorrecto o ha expirado' });
     }
 
-    if (new Date(reg.expiracion) < new Date()) {
-      return res.status(400).json({ error: 'El código ha expirado. Solicita uno nuevo.' });
-    }
+    // Firmar un resetToken JWT de un solo uso (10 min)
+    const resetToken = jwt.sign(
+      { email: correo.trim().toLowerCase(), purpose: 'password_reset' },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
 
-    res.json({ mensaje: 'Código verificado correctamente', valido: true });
+    res.json({ mensaje: 'Código verificado correctamente', valido: true, resetToken });
   } catch (error) {
     console.error('verificarCodigoRecuperacion error:', error.message);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 };
 
-// 3. RESTABLECER CONTRASEÑA
+// 3. RESTABLECER CONTRASEÑA (requiere resetToken del paso anterior)
 const restablecerPassword = async (req, res) => {
-  const { correo, codigo, nuevaPassword } = req.body;
+  const { correo, resetToken, nuevaPassword } = req.body;
 
-  if (!correo || !codigo || !nuevaPassword) {
+  if (!correo || !resetToken || !nuevaPassword) {
     return res.status(400).json({ error: 'Todos los campos son requeridos' });
   }
 
@@ -465,21 +445,16 @@ const restablecerPassword = async (req, res) => {
   }
 
   try {
-    // 1. Validar el código
-    const { data: reg, error: codeError } = await supabase
-      .from('codigos_recuperacion')
-      .select('*')
-      .eq('correo', correo.trim().toLowerCase())
-      .eq('codigo', codigo.trim())
-      .eq('usado', false)
-      .maybeSingle();
-
-    if (codeError || !reg) {
-      return res.status(400).json({ error: 'Código de verificación inválido o ya fue usado' });
+    // 1. Validar el resetToken JWT
+    let payload;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(400).json({ error: 'El token de restablecimiento es inválido o expiró. Solicita uno nuevo.' });
     }
 
-    if (new Date(reg.expiracion) < new Date()) {
-      return res.status(400).json({ error: 'El código ha expirado. Solicita uno nuevo.' });
+    if (payload.purpose !== 'password_reset' || payload.email !== correo.trim().toLowerCase()) {
+      return res.status(400).json({ error: 'El token de restablecimiento no es válido' });
     }
 
     // 2. Obtener el ID del usuario en perfiles
@@ -503,12 +478,6 @@ const restablecerPassword = async (req, res) => {
       console.error('Error al actualizar password en auth:', updateAuthError.message);
       return res.status(400).json({ error: 'No se pudo actualizar la contraseña: ' + updateAuthError.message });
     }
-
-    // 4. Marcar el código como usado
-    await supabase
-      .from('codigos_recuperacion')
-      .update({ usado: true })
-      .eq('id', reg.id);
 
     res.json({ mensaje: 'Contraseña restablecida con éxito. Ya puedes iniciar sesión.' });
 
