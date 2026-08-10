@@ -22,9 +22,10 @@ app.get('/', (req, res) => {
     <html>
     <head><meta charset="utf-8"><title>CuidaRed</title></head>
     <body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f0f4f8">
-      <div style="text-align:center">
+      <div style="text-align:center;max-width:400px;padding:20px">
         <h2 style="color:#1a73e8">CuidaRed</h2>
-        <p id="msg">Procesando autenticación...</p>
+        <p id="status">Verificando enlace...</p>
+        <a id="appLink" href="#" style="display:none;margin-top:20px;padding:14px 28px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:10px;font-size:16px;font-weight:600">Abrir en la app</a>
       </div>
       <script>
         const hash = window.location.hash.substring(1);
@@ -33,10 +34,22 @@ app.get('/', (req, res) => {
         const type = params.get('type');
         
         if (accessToken) {
-          window.location.href = 'cuidaredfrontend://reset-password?accessToken=' + encodeURIComponent(accessToken);
+          const deepLink = 'cuidaredfrontend://reset-password?accessToken=' + encodeURIComponent(accessToken);
+          const appLink = document.getElementById('appLink');
+          const status = document.getElementById('status');
+          
+          appLink.href = deepLink;
+          appLink.style.display = 'inline-block';
+          status.textContent = 'Haz clic en el botón para abrir la app y restablecer tu contraseña.';
+          
+          appLink.addEventListener('click', function() {
+            setTimeout(function() {
+              status.textContent = 'Si la app no se abrió, ábrela manualmente.';
+            }, 2000);
+          });
         } else {
-          document.getElementById('msg').textContent = 'Error: No se pudo procesar el enlace. Intenta de nuevo.';
-          document.getElementById('msg').style.color = 'red';
+          document.getElementById('status').textContent = 'Error: No se pudo procesar el enlace. Intenta de nuevo.';
+          document.getElementById('status').style.color = 'red';
         }
       </script>
     </body>
