@@ -378,7 +378,7 @@ const solicitarRecuperacion = async (req, res) => {
       email: correo.trim().toLowerCase(),
       options: {
         shouldCreateUser: false,
-        emailRedirectTo: 'cuidaredfrontend://reset-password',
+        emailRedirectTo: 'https://cuidared-backend-production.up.railway.app',
       },
     });
 
