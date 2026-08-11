@@ -71,7 +71,7 @@ exports.agregarFamiliar = async (req, res) => {
         tipos_cuidado: tipos_cuidado || [],
         condiciones_especificas: req.body.condiciones_especificas || null,
         dias_disponibles: req.body.dias_disponibles || null,
-        alcance_servicio: req.body.alcance_servicio || null,
+        alcance_servicio: req.body.alcance_servicio === 'incluye_domestico' ? 'incluye_tareas_domesticas' : (req.body.alcance_servicio || 'solo_cuidado'),
         tareas_domesticas: req.body.tareas_domesticas || [],
       })
       .select().single();
@@ -96,7 +96,7 @@ exports.editarFamiliar = async (req, res) => {
     if (tipos_cuidado !== undefined) cambios.tipos_cuidado = tipos_cuidado;
     if (req.body.condiciones_especificas !== undefined) cambios.condiciones_especificas = req.body.condiciones_especificas;
     if (req.body.dias_disponibles !== undefined) cambios.dias_disponibles = req.body.dias_disponibles;
-    if (req.body.alcance_servicio !== undefined) cambios.alcance_servicio = req.body.alcance_servicio;
+    if (req.body.alcance_servicio !== undefined) cambios.alcance_servicio = req.body.alcance_servicio === 'incluye_domestico' ? 'incluye_tareas_domesticas' : req.body.alcance_servicio;
     if (req.body.tareas_domesticas !== undefined) cambios.tareas_domesticas = req.body.tareas_domesticas;
 
     const { data, error } = await supabase

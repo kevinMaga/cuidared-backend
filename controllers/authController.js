@@ -341,7 +341,7 @@ const completarPerfilFamilia = async (req, res) => {
         tipos_cuidado: m.careTypes || [],
         condiciones_especificas: m.conditions || null,
         dias_disponibles: m.schedule || [],
-        alcance_servicio: m.taskScope || 'solo_cuidado',
+        alcance_servicio: m.taskScope === 'incluye_domestico' ? 'incluye_tareas_domesticas' : 'solo_cuidado',
         tareas_domesticas: m.tasks || [],
       }));
       const { error: famError } = await supabase.from('familiares').insert(filas);
