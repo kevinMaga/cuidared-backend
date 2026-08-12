@@ -37,6 +37,21 @@ const registro = async (req, res) => {
     // 3. Crear registro en la tabla según el rol
     if (rol === 'cuidadora') {
       await supabase.from('cuidadoras').insert({ id: userId });
+
+      // Asignar automáticamente los cursos obligatorios activos a la nueva cuidadora
+      const { data: cursosObligatorios } = await supabase
+        .from('cursos')
+        .select('id')
+        .eq('categoria', 'obligatorio')
+        .eq('archivado', false);
+
+      if (cursosObligatorios && cursosObligatorios.length > 0) {
+        const filas = cursosObligatorios.map((curso) => ({
+          curso_id: curso.id,
+          cuidadora_id: userId,
+        }));
+        await supabase.from('cursos_asignados').insert(filas);
+      }
     } else if (rol === 'empleadora') {
       await supabase.from('empleadoras').insert({ id: userId });
     }
