@@ -86,6 +86,30 @@ exports.obtenerCursosAsignados = async (req, res) => {
   try {
     const { cuidadoraId } = req.params;
 
+    // Auto-reparación: asegura que la cuidadora tenga asignados TODOS los
+    // cursos obligatorios activos (RF-81), incluso si faltaron al registrarse.
+    const { data: obligatorios } = await supabase
+      .from('cursos')
+      .select('id')
+      .eq('categoria', 'obligatorio')
+      .eq('archivado', false);
+
+    const { data: prevAsignaciones } = await supabase
+      .from('cursos_asignados')
+      .select('curso_id')
+      .eq('cuidadora_id', cuidadoraId);
+
+    const yaAsignados = new Set((prevAsignaciones || []).map((a) => a.curso_id));
+    const faltantes = (obligatorios || [])
+      .map((c) => c.id)
+      .filter((cursoId) => !yaAsignados.has(cursoId));
+
+    if (faltantes.length > 0) {
+      const filas = faltantes.map((cursoId) => ({ curso_id: cursoId, cuidadora_id: cuidadoraId }));
+      const { error: eIns } = await supabase.from('cursos_asignados').insert(filas);
+      if (eIns) console.error('obtenerCursosAsignados (auto-asignación obligatorios):', eIns.message);
+    }
+
     const { data: asignaciones, error: e1 } = await supabase
       .from('cursos_asignados')
       .select('curso_id')

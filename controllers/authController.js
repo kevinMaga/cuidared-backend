@@ -50,7 +50,9 @@ const registro = async (req, res) => {
           curso_id: curso.id,
           cuidadora_id: userId,
         }));
-        await supabase.from('cursos_asignados').insert(filas);
+        const { error: asignacionError } = await supabase.from('cursos_asignados').insert(filas);
+        if (asignacionError)
+          console.error('registro (auto-asignación cursos obligatorios):', asignacionError.message);
       }
     } else if (rol === 'empleadora') {
       await supabase.from('empleadoras').insert({ id: userId });
